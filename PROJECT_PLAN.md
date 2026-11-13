@@ -1,290 +1,254 @@
-# Smart Elevator System - implementation plan for four people
+# Smart Elevator System - Implementation Plan
 
-Prepared for **Thanh, An, Huy, and Hai** on **13 November 2026**.
+Team: **An, Thanh, Hai, Huy** (coding team). Source: [Group No. 2 SRS.pdf](<Group No. 2 SRS.pdf>), Smart Elevator System SRS v1.1.
 
-Source: [Group No. 2 SRS.pdf](<Group No. 2 SRS.pdf>), Smart Elevator System SRS v1.1. This plan covers the software described in Sections 1-9 and Appendices A-D, including all 16 user stories. Team assignments, estimates, schedule, repository layout, and collaboration rules below are proposed working arrangements.
+Merge and Git rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## 1. Goal and planning assumptions
+## 1. Goal and deadline
 
-Build a reproducible, software-only Smart Elevator System with:
+Build the software-only Smart Elevator simulator described in the SRS:
 
-- A 40-floor building, four passenger cars P1-P4, and one goods car G1.
-- Ordinary hall calls, boarding, and destinations selected inside the cabin.
-- Dispatch based on feasible pickup ETA, directional grouping, protected commitments, and unique call ownership.
-- Independent cabin motion, doors, load checks, sensor feedback, safety vetoes, faults, and recovery.
-- Authorized MEDICAL and FREIGHT missions through a Control Center.
-- Hall and cabin panels, fleet monitoring, simulation controls, and an optimization view.
-- Deterministic event ordering, replay, logs, metrics, typed contracts, and gRPC integration.
-- Offline SATSA parameter search, comparison with baselines and grid search, and approved policy activation.
+- 40 floors
+- passenger cars P1-P4 and goods car G1
+- Dispatch, Cabin, Control Center
+- a deterministic simulation engine
+- a web UI
+- offline SATSA tuning
 
-Use **eight weeks, organized as four two-week sprints**, as an initial schedule. No deadline or technology stack was supplied. Assume comparable experience and approximately 10-12 available hours per person per week; review this assumption at kickoff. Use relative weeks rather than calendar dates until the team chooses a start date.
+| When | Milestone |
+|---|---|
+| **Fri 13/11, tonight** | Stack locked. An delivers the **framework** (Section 4). Whole team reviews it, then it is frozen. |
+| **Sat 14/11, 16:00** | Every module passes its own contract tests against fakes. |
+| **Sat 14/11, 16:00-20:00** | An integrates real modules in the order of Section 6. |
+| **Sat 14/11, 23:59** | **Code freeze.** AT-01 to AT-06 pass, or are listed as known failures. |
+| Tue 17/11 | Presentation (prepared by the rest of the group, not by this coding team). |
 
-Plan **40 delivery points per person: 160 points total, 25% each**. Points estimate complexity, effort, and uncertainty; they are not hours. Each package includes design, implementation, relevant tests, error handling, and documentation. Everyone also reviews code and participates in integration. Reserve about 20% of available time for review, integration, and uncertainty rather than filling every hour with feature work.
+The presentation is graded 50% on implementation and 50% on how we used AI. Coders do not make slides. Each coder does leave short AI notes in every PR (CONTRIBUTING.md, Section 6), which the presenters use as raw material.
 
-The repository currently contains the source PDF and no application implementation or initial commit. The PDF describes design targets, not a completed system. It mentions `Smart_Elevator_Dispatch_Feasibility_Demo.py`, but that script is absent from this workspace. Obtain it if available, or independently reconstruct and verify the numerical examples. Do not report the PDF's historical check results as results from this repository.
+### Scope decisions
 
-## 2. Equal ownership and module boundaries
+| Item | Decision |
+|---|---|
+| Transport | **In-process only.** Messages keep the exact SRS 3.3 / Appendix D fields. Real gRPC is deferred, which SRS 3.4 allows: "a single-process simulator can implement the same logical interfaces". |
+| Authentication | Role picker in the UI plus backend role checks. No passwords or login system. |
+| Fire recall | Event exists and is displayed. Only minimal behaviour: suspend ordinary planning. |
+| SATSA | In scope. Grid search over the 55 (R, W) pairs is built first, then SATSA on the same evaluator. |
+| Missing reference script | `Smart_Elevator_Dispatch_Feasibility_Demo.py` is not in this repo. The SRS numbers are re-derived in our own tests instead. |
 
-| Person | Primary delivery responsibility | Main outputs | Planned points |
-| --- | --- | --- | ---: |
-| Thanh | Dispatch and SATSA search | Canonical calls, ETA and grouping policy, ownership reconciliation, mission candidate selection, offline search algorithm | 40 |
-| An | Cabin execution and local safety | Motion and door state machines, boarding and load model, versioned route acceptance, fault isolation, exclusive mission execution | 40 |
-| Huy | User interfaces and Control Center | Five interface surfaces, role checks, mission workflows, alerts, recovery authorization, optimization approval | 40 |
-| Hai | Simulation and integration infrastructure | Event clock and replay, contracts and gRPC adapters, logs and metrics, experiment harness, grid search and baseline comparison | 40 |
-| **Total** | | | **160** |
+## 2. Locked stack
 
-This division balances engineering effort rather than counting screens, requirement IDs, or lines of code. SATSA is deliberately divided: **Thanh implements the search; Hai implements the repeatable evaluator and comparisons; Huy implements approval; An verifies that experimental runs preserve cabin invariants.** Hai does not also own the search algorithm or everyone's testing.
+All four use exactly this. Do not let your AI pick a different library.
 
-Authority must follow the SRS:
+| Item | Choice |
+|---|---|
+| Language | Python 3.12 |
+| Data types | `dataclasses` + `enum.Enum` (no Pydantic inside the core) |
+| API | FastAPI: REST for commands, one WebSocket pushing snapshots |
+| UI | One plain HTML/CSS/JS page in `web/`, no build step, no framework |
+| Tests | `pytest` |
+| Lint / format | `ruff check` + `ruff format` |
+| Run | `python -m app` (server + UI), `python -m app.headless --scenario AT-01` |
+| Dependencies | `requirements.txt` pinned by An. Nobody adds a package without telling An. |
 
-1. Dispatch owns canonical hall-call records and proposes routes.
-2. Each Cabin Controller alone accepts or rejects its route and controls its simulated motion and doors.
-3. Control Center authorizes privileged actions and recovery; authorization cannot bypass cabin guards.
-4. Simulation Engine owns simulation time and deterministic event delivery.
-5. SATSA produces an offline recommendation. It never issues door or movement commands.
-
-### Proposed repository layout
-
-Choose the language and frameworks together on Day 1. Prefer one shared backend language unless there is a clear course requirement. Begin with modules communicating in-process, then add gRPC adapters without changing behavior.
+## 3. Working model: one framework, three independent modules
 
 ```text
-contracts/                  Hai: shared types, schemas, .proto files, error codes
-src/dispatch/               Thanh: calls, ETA, assignment, policy consumption
-src/cabin/                  An: one reusable controller instantiated for five cars
-src/control-center/         Huy: authorization, missions, recovery, policy registry
-src/simulation/             Hai: clock, event queue, adapters, trace replay
-src/optimization/search/    Thanh: SATSA candidate generation and search
-src/optimization/evaluate/  Hai: objective, grid search, experiment runner
-ui/                         Huy: hall, cabin, fleet, simulation, optimization views
-scenarios/                  Hai coordinates; every owner supplies domain fixtures
-tests/                      Every owner maintains tests for their own behavior
-docs/                       Every owner maintains their design and evidence
+                 ┌──────────────── An: framework ─────────────────┐
+                 │ contracts/  messages · enums · config ·        │
+                 │             interfaces · routing               │
+                 │ fakes/      FakeDispatch · FakeCabin · FakeCC  │
+                 │ tests/contract/  the "exam" for each module    │
+                 │ simulation/ event queue · clock · replay · log │
+                 │ app/        wiring: --dispatch=real|fake ...   │
+                 └───────▲───────────────▲───────────────▲────────┘
+                         │ implements    │ implements    │ implements
+                   Thanh: dispatch/  Hai: cabin/   Huy: control_center/ + api/ + web/
 ```
 
-These are planned directories, not files already implemented. Folder ownership identifies the usual reviewer; it does not prevent others from contributing through reviewed PRs.
+- **The framework is the only shared dependency.** Thanh, Hai and Huy never import each other's code and never need to talk to each other to make progress.
+- **Each module is a pure message handler.** `handle(msg, now) -> list[Message]`. It never calls another module. The engine delivers every message.
+- **Each module is "done" when its contract tests pass.** Those tests live in `tests/contract/test_<module>.py`. You can always run the whole system with your module real and the others fake.
+- **Integration is swapping fakes for real modules.** An does this; nobody else needs to coordinate it.
+- **If the framework is wrong or missing something, tell An.** Do not patch `contracts/` yourself (CONTRIBUTING.md, Section 4).
 
-## 3. Work packages
+## 4. The framework (An, tonight - blocks everyone)
 
-Create one issue per package below. Split packages larger than five points into smaller PRs while retaining the package's total estimate. Dependencies refer to the initial usable contract or implementation, so a small reviewed foundation can unblock work before an entire package is finished.
+An builds this first, using AI, from the SRS. The whole team then reviews it for **20-30 minutes** before splitting up. This review matters: if the framework is wrong, every module is wrong.
 
-### Thanh - 40 points
+| # | Deliverable | Content |
+|---|---|---|
+| F1 | `contracts/messages.py` | One frozen dataclass per message in the table below. Every message has `msg_id`, `t_sim` and `deliver_at`. |
+| F2 | `contracts/enums.py` | `Direction`, `DoorState` (CLOSED, OPENING, OPEN, CLOSING, OBSTRUCTED), `CabinMode` (AUTO, FULL, OVERLOAD_HOLD, FAULT_HOLD, MAINTENANCE, MISSION_DRAINING, MISSION_EXCLUSIVE, FIRE), `CallStatus` (PENDING, RESERVED, ASSIGNED, SERVED), `MissionStatus` (REQUESTED, APPROVED, REJECTED, UNAVAILABLE, RESERVED, DRAINING, IN_PROGRESS, COMPLETED, FAILED, HELD), `NackReason`, `Role`, `EventType` |
+| F3 | `contracts/config.py` | `SECONDS_PER_FLOOR=2`, `DWELL_S=6`, `FLOORS=40`, `CARS=("P1","P2","P3","P4","G1")`, `R=3`, `W=5`, `DELAY_CAP_S=10`, `AGE_LIMIT_S=60`, `FULL_LOAD_KG=900`, `MAX_LOAD_KG=1000`, `INSERT_CUTOFF_FLOORS=1`, telemetry staleness, `POLICY_VERSION` |
+| F4 | `contracts/interfaces.py` | `class Module(Protocol): name: str; def handle(self, msg, now) -> list[Message]`. Typed subclasses `DispatchModule`, `CabinModule` (one instance per car), `ControlCenterModule`, and `snapshot() -> dict` for the UI. |
+| F5 | `contracts/routing.py` | Which module receives which message type (table below). |
+| F6 | `fakes/` | `FakeDispatch`: assigns the nearest idle car. `FakeCabin`: always ACKs and jumps between floors on timers. `FakeControlCenter`: approves everything. Simple, but they emit correctly shaped messages. |
+| F7 | `tests/contract/` | One file per module, written from SRS numbers **before** the module exists. Covers the AT-01 to AT-06 oracles plus the edge cases in Section 7. Tests use only `contracts/` and fakes. |
+| F8 | `simulation/` + `app/` | Event queue ordered by (time, priority category, sequence) as in SRS 7.7. Also: clock, pause/reset, seeded replay, JSON-lines event log, and CLI flags to choose real or fake per module. |
+| F9 | `AI_CONTEXT.md` | The text every coder pastes into their AI first: stack, rules, the module interface, and "only edit your own folder". |
 
-| ID | Work package and observable result | Main dependencies | Points |
-| --- | --- | --- | ---: |
-| TH-01 | Canonical hall-call repository and lifecycle. Validate floors/directions, deduplicate active floor-direction pairs, retain original age, distinguish pending/reserved/assigned/served, and complete pickup separately from drop-off. | HI-03 | 5 |
-| TH-02 | Feasible route generation and ETA ranking. Evaluate all eligible passenger cars, use continuous position and existing stops, apply stable tie breaking and the stopping cutoff, and compare insertion delay with the original committed ETA. | HI-03, AN-01, AN-02 | 8 |
-| TH-03 | Dispatch-side ownership and reconciliation. Reserve one candidate, confirm only on ACK, distinguish NACK from transport timeout, reconcile accepted route versions before release/reassignment, and preserve ages through faults. | AN-05, HI-03; HI-04 for network checks | 8 |
-| TH-04 | Same-direction grouping and aging. Enforce fixed-anchor R/W bounds without waiting to form a group; reevaluate pending calls on fleet changes; protect calls aged at least 60 s. | TH-01, TH-02, HI-02 | 5 |
-| TH-05 | Mission candidate selection. Compute medical ETA after onboard drop-offs across all compatible cars; apply G1-first freight eligibility and permitted passenger fallback; return explicit selection failure to Control Center. | HY-05 contract, AN-04, TH-03 | 3 |
-| TH-06 | Offline SATSA search. Validate run inputs, project continuous candidates to integer R/W, implement adaptive Gaussian updates, stagnation-triggered seeds and Nelder-Mead refinement, and use Hai's evaluator/cache. Document the adaptation to the cited paper. | HI-05, HI-06 evaluation interface | 8 |
-| TH-07 | Dispatch policy activation. Consume only an approved version at a defined safe decision boundary, retain accepted route commitments, and expose active policy version in decisions and replay evidence. | HY-07, HI-02 | 3 |
-| | **Total** | | **40** |
+### Messages (from SRS 3.3, 3.4, 7.9 and Appendix D)
 
-### An - 40 points
+| Message | Producer | Consumer(s) | Key fields |
+|---|---|---|---|
+| `HallCallPressed` | UI / scenario | Dispatch | floor, direction |
+| `HallCallAck` | Dispatch | UI, log | request_id, status, duplicate flag |
+| `CabinDestinationPressed` | UI / scenario | Cabin | car_id, floor, passenger_id |
+| `RouteProposal` | Dispatch | Cabin (by car_id) | command_id, car_id, expected_route_version, ordered_stops, expiry_ts, mission_id? |
+| `RouteReply` | Cabin | Dispatch | command_id, accepted, committed_version, reason |
+| `RouteVersionQuery` / `RouteVersionReport` | Dispatch / Cabin | Cabin / Dispatch | for reconciliation after a timeout |
+| `CabinTelemetry` | Cabin | Dispatch, Control Center, log | car_id, position (float), direction, door, locked, load_kg, passengers, mode, faults, route_version, stops |
+| `ServiceEvent` | Cabin | Dispatch, Control Center, log | event (ARRIVED, HALL_CALL_SERVED, DEST_SERVED, PICKUP_DONE, DELIVERY_DONE, ...), car_id, floor, ref id |
+| `PassengerBoard` / `PassengerExit` | Scenario / UI | Cabin | car_id, passenger_id, weight_kg |
+| `MissionRequest` | UI | Control Center | type MEDICAL/FREIGHT, role, origin, destination, material profile |
+| `MissionApproval` | Control Center | Dispatch, log | mission_id, type, origin, destination, capabilities |
+| `MissionStatusUpdate` | Dispatch / Cabin / CC | Control Center, UI | mission_id, status, car_id, reason |
+| `Alert` | any | Control Center, UI | kind ALARM/MEDICAL/FIRE/FAULT/NO_ELIGIBLE_CAR/UNAVAILABLE, details |
+| `FaultInjected` / `FireAlarm` / `AlarmPressed` | Scenario / UI | Cabin | car_id, fault kind |
+| `RecoveryRequest` / `RecoveryApproved` | UI / Control Center | Control Center / Cabin | car_id, supervisor role |
+| `PolicyActivated` | Control Center | Dispatch | policy_version, R, W |
 
-| ID | Work package and observable result | Main dependencies | Points |
-| --- | --- | --- | ---: |
-| AN-01 | Independent cabin state and simulated sensor adapters. Represent P1-P4/G1 with position, direction, mode, route/version, door, load, passenger count, freshness and faults; emit timestamped telemetry. | HI-03 | 5 |
-| AN-02 | Continuous motion and stopping rules. Advance position at the configured speed, arrive only at valid stops, reject unsafe late insertions and instant reversal, and require valid local movement guards. | AN-01, HI-02 | 8 |
-| AN-03 | Door state machine. Implement CLOSED/OPENING/OPEN/CLOSING/OBSTRUCTED, landing-zone checks, dwell, door requests, obstruction reopening, and closed-and-locked movement permission. | AN-01, HI-02 | 5 |
-| AN-04 | Boarding, destinations, load and empty handoff. Accept destinations after boarding, track exits, preserve onboard stops, bypass ordinary pickups at FULL_LOAD, hold on overload, and block exclusive handoff on contradictory empty-cabin evidence. | AN-02, AN-03 | 8 |
-| AN-05 | Cabin route command receiver. Validate expected version and local feasibility, preserve the previous route on NACK, cache duplicate command results, reject reused IDs with changed payloads, and expose authoritative route/version for reconciliation. | HI-03 | 5 |
-| AN-06 | Fault, alarm, fire-input and recovery behavior. Enter FAULT_HOLD safely, retain onboard passengers, prevent between-floor opening, publish alerts, and return to AUTO only after approved readiness checks. Finish the local response policy with Huy at kickoff. | AN-01, AN-03, HY-06 contract | 5 |
-| AN-07 | Local MEDICAL/FREIGHT execution. Drain onboard trips, verify stationary and empty handoff, confirm boarding/loading, enforce direct exclusive legs, and handle failed loading, unloading and safety interruptions. | AN-04, AN-05, HY-05, TH-05 | 4 |
-| | **Total** | | **40** |
+The exact names may change during review tonight. **After the freeze they do not change** without the procedure in CONTRIBUTING.md, Section 4.
 
-### Huy - 40 points
+## 5. Ownership and work packages
 
-| ID | Work package and observable result | Main dependencies | Points |
-| --- | --- | --- | ---: |
-| HY-01 | Application shell and fleet view. Display all five cars independently with position, direction, doors, mode, load warnings, faults and accepted routes. | HI-03 snapshots; mock telemetry initially | 5 |
-| HY-02 | Hall and cabin panels. Restrict terminal directions and invalid floors; show pending versus assigned calls; create destinations only after boarding; expose valid door requests and a separate alarm action. | TH-01, AN-03, AN-04 | 6 |
-| HY-03 | Simulation console. Start/pause/reset/replay with seed and configuration controls; show session time/state, pending events, ownership, route versions and basic metrics. | HI-02, HI-05 | 4 |
-| HY-04 | Control Center role authorization and audit. Enforce permissions in backend handlers, validate grant inputs and material declarations, protect privileged data, and log approved/refused actions without ordinary passenger identity collection. | HI-03, HI-05 audit contract | 5 |
-| HY-05 | Medical and freight orchestration. Submit/authorize missions, validate capabilities and material profiles, coordinate reservation/draining/loading/delivery, show held/failed/completed states, and retain unavailable medical missions with alerts. | HY-04, TH-05, AN-07 | 8 |
-| HY-06 | Alerts, monitoring and supervisor recovery. Distinguish alarm/medical/fire/fault events, display explicit NO_ELIGIBLE_CAR/UNAVAILABLE, authorize recovery after readiness evidence, and prevent UI actions from bypassing local guards. | AN-06, HI-05 | 6 |
-| HY-07 | Optimization view, approval and policy registry. Submit authorized offline runs; display candidate, objective and comparisons; store versioned recommendations and approvals; request safe activation and show the active version. | TH-06, HI-06, TH-07 contract | 6 |
-| | **Total** | | **40** |
+| Person | Owns (folders) | One-line responsibility |
+|---|---|---|
+| **An** | `contracts/`, `fakes/`, `tests/contract/`, `simulation/`, `app/`, `optimization/`, `scenarios/` | Framework, engine, integration, metrics, grid search + SATSA |
+| **Thanh** | `dispatch/`, `tests/dispatch/` | Hall calls, ETA, insertion, grouping, ownership, mission car selection |
+| **Hai** | `cabin/`, `tests/cabin/` | Motion, doors, load, sensors, route ACK/NACK, faults, mission execution |
+| **Huy** | `control_center/`, `api/`, `web/`, `tests/control_center/` | Roles, missions, alerts, recovery, policy approval, API, all UI screens |
 
-### Hai - 40 points
+For each package: give your AI the listed SRS sections, `AI_CONTEXT.md`, `contracts/` and your contract test file. Ask for a plan first, correct the plan, then implement.
 
-| ID | Work package and observable result | Main dependencies | Points |
-| --- | --- | --- | ---: |
-| HI-01 | Repository and development foundation. Establish the selected build/runtime, consistent local commands, formatting/lint/build/test CI, sample configuration, and a runnable module skeleton. | Day 1 stack decision | 5 |
-| HI-02 | Deterministic simulation kernel. Implement event ordering by time/priority/sequence, controllable clock, complete pause, reset, seeded replay, event invalidation and deterministic fault/transport-delay injection. | HI-03 | 8 |
-| HI-03 | Shared contracts and in-process adapters. Define DTOs/enums, event envelope, snapshots, route ACK/NACK reasons, reconciliation read contract and optimization evaluation/result interfaces; provide stubs and fixtures early. | Joint Day 1-2 contract review | 3 |
-| HI-04 | gRPC/proto3 adapters and telemetry streams. Implement typed dispatch/cabin/Control Center boundaries, distinguish transport failures from application NACKs, and prove retry/delay behavior against the same logical contracts. | HI-03, AN-05, TH-03 | 6 |
-| HI-05 | Structured logging, metrics and scenario fixtures. Record required lifecycle/audit data, compute wait and commitment metrics, version traces and seeds, and supply traffic/fault fixtures and isolated evaluator inputs. | HI-02; events from all owners | 6 |
-| HI-06 | Research evaluation and comparisons. Implement the fitness function, hard-invariant rejection, cached evaluation, first-idle/directional-sweep baselines, fixed (3,5), exhaustive R/W grid search, and separate held-out evaluation of SATSA results. | HI-02, HI-05, TH-02; TH-06 for final comparison | 8 |
-| HI-07 | Reproducible packaging and evidence automation. Provide startup instructions and saved demo scenarios, assemble per-owner acceptance results, record experiment inputs/results and runtime measurements, and verify a clean local setup. | All owners' runnable modules and evidence | 4 |
-| | **Total** | | **40** |
+### An - framework, engine, evaluation
 
-### Keeping the workload equal during development
+| ID | Package | SRS | Done when |
+|---|---|---|---|
+| AN-01 | Framework F1-F9 (Section 4) | 3.3, 3.4, 7.1, 7.7, 7.9, App. D | Reviewed and frozen tonight. Whole system runs with all fakes. |
+| AN-02 | Deterministic engine: queue order, clock, RUNNING/PAUSED/STOPPED, reset, seeded replay, fault injection | SIM-01..05, SIM-08, SYS-01, SYS-04, NFR-05 | Same trace + seed produces an identical log. Pause freezes everything. |
+| AN-03 | Event log + metrics: mean, median, P95 and max wait; unserved; delay violations; medical/freight times; dispatch wall time | LOG-01..03, NFR-03, NFR-04 | Metrics printed after a headless run |
+| AN-04 | Scenarios: AT-01 to AT-06 setups plus seeded random traffic generators (train / held-out) | 6.4, 6.5, 9.2 | `python -m app.headless --scenario AT-0x` works |
+| AN-05 | Integration in the order of Section 6; route failing tests back to their owner | 9.6 | AT-01 to AT-05 pass on real modules |
+| AN-06 | Evaluator `evaluate(R, W, traces) -> metrics or rejection`, fitness J(θ), caching, hard-invariant rejection; grid search over R=1..5, W=0..10; comparison with fixed (3,5) and the two baseline policies Thanh provides | OPT-04, OPT-05, LOG-04, NFR-06, 6.5 | Comparison table on held-out traces |
+| AN-07 | SATSA search: Gaussian seed updates, stagnation-triggered extra seeds, Nelder-Mead refinement, clamp/round to integer (R, W) | OPT-01..03, 4.8 | AT-06 passes; SATSA result shown next to grid and (3,5) |
 
-- Re-estimate after the first sprint using actual effort and remaining risk. Equal starting estimates do not guarantee equal working hours.
-- Review remaining points, hours spent, blocked time and review duties at every sprint planning session. Keep each person's remaining load within roughly 10% of the team average where practical.
-- Transfer a small, independent package or subtask when capacity differs. Record both the owner change and point transfer; do not leave the old owner accountable for transferred work.
-- If the simulation foundation becomes the bottleneck, An can take a sensor/fault fixture subtask or Thanh can take an experiment adapter. Transfer equivalent remaining points from their existing queue.
-- No person becomes the permanent tester, document writer, or integration fixer. Each author supplies their tests and evidence; Hai only coordinates the shared runner and evidence format.
+### Thanh - Dispatch
 
-## 4. Delivery schedule and dependencies
+| ID | Package | SRS | Done when |
+|---|---|---|---|
+| TH-01 | Hall-call repository: validate 1-40, reject DOWN@1 and UP@40, deduplicate (floor, direction), keep `created_at`, PENDING→RESERVED→ASSIGNED→SERVED | DC-01, REQ-01, REQ-02, SYS-03 | `test_dispatch.py::hall_*` green |
+| TH-02 | Eligible cars, ETA (eq. 1, 2), safe same-direction insertion, one-floor cutoff, cumulative DELAY_CAP against the **fixed** committed reference | DC-02, DC-04, DC-05, MOVE-04, NFR-02 | AT-01 pickup 8 s; TC-DELAY-01 rejects 32 vs 20 |
+| TH-03 | Ownership: reserve one car, confirm only on ACK, NACK→try next car, timeout→`RouteVersionQuery` before releasing, idempotent `command_id` | REQ-03, REQ-04, SAF-04, SIM-07 | AT-05: never two owners |
+| TH-04 | Grouping R/W with a fixed anchor and no waiting; re-evaluate PENDING calls on telemetry; AGE_LIMIT protection; read R/W from the active policy | DC-03, DC-06, SIM-05 | AT-02: 29 at 4 s, 27 at 14 s |
+| TH-05 | Medical selection (eq. 5) across all capable cars after onboard drain; deterministic tie-break; UNAVAILABLE if none. Freight: G1 first, then permitted P-car. Return unserved calls to the pool with original ages. | MED-01..04, EMG-03, FRT-02 (selection) | AT-03: P1=90, P2=20, P4=58, P2 chosen |
+| TH-06 | Two baseline policies behind the same interface: first-idle, directional sweep; `PolicyActivated` applies only at the next decision boundary | 6.5, OPT-06 (consumer) | An's evaluator can run all three policies |
 
-The schedule preserves the SRS's R1-R5 order. R2 and R3 are separate gates inside Sprint 2. The integration steward rotates once per sprint; see [CONTRIBUTING.md](CONTRIBUTING.md) for merge rules.
+### Hai - Cabin (one class, five instances)
 
-| Sprint | Thanh | An | Huy | Hai | Exit gate | Steward |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1: Weeks 1-2 | Hall-call lifecycle; initial ETA and reservation flow | Cabin state, minimal motion/doors and ACK receiver | Fleet shell, basic hall/cabin panels, role model | Build/CI, shared contracts, clock/event queue, in-process adapters | **R1:** 40 floors/five cars, valid/deduplicated calls, pause/reset, repeatable initial trace; minimal contracts exercised | Thanh |
-| 2: Weeks 3-4 | Complete ETA, ownership, delay protection, grouping and aging | Complete ordinary trips, doors, load/boarding and initial faults | Complete passenger feedback, console, fault/ownership monitoring | Full replay, logs/metrics, gRPC and lost/delayed-message fixtures | **R2:** one complete safe passenger trip. Then **R3:** grouping, fault isolation and no duplicate ownership | An |
-| 3: Weeks 5-6 | Medical selection, freight eligibility, research search design and policy contract | Empty handoff, exclusive mission legs, recovery/failure paths | Roles/audit, medical/freight workflows, unavailable states and recovery | Mission traces, baseline comparisons, objective/grid harness and benchmark inputs | **R4:** medical and freight examples pass, unauthorized actions are rejected, safety still wins | Huy |
-| 4: Weeks 7-8 | SATSA search, safe policy consumption, dispatch/algorithm regression | Safety verification on research traces; remaining fault, sensor and exclusive-leg edge cases | Optimization approval/results view, complete UI flows and operator guide | Held-out experiments, optimizer comparison, reproducibility and packaging | **R5:** approved recommendation and safe activation, complete acceptance evidence, tagged reproducible demo | Hai |
+| ID | Package | SRS | Done when |
+|---|---|---|---|
+| HA-01 | Cabin state: float position, direction, mode, route + version, door, lock, load, passenger list, faults; telemetry on every change | SYS-02, MOVE-01, SEN-01 | Telemetry matches contract |
+| HA-02 | Motion: 2 s/floor without teleporting, stop only at valid stops, no reversal while committed, reject late insertion under 1 floor | MOVE-02, MOVE-03, MOVE-05, MOVE-06 | `test_cabin.py::move_*` green |
+| HA-03 | Door state machine with landing-zone check, 6 s dwell, obstruction → OPENING, move only when CLOSED and locked | DOOR-01..05, SAF-01, SAF-02 | TC-DOOR-01/02 green |
+| HA-04 | `RouteProposal` handling: version and local feasibility checks; ACK or NACK with a reason; keep the old route on NACK; cache the result per `command_id`; same id with a different payload is an error; answer `RouteVersionQuery` | CB-01, SIM-06 | TC-IDEMP-01, AT-05 cabin side |
+| HA-05 | Boarding and destinations only after boarding; pickup and drop-off are separate events; 900 kg bypasses new pickups; >1000 kg holds; manual exit on overload | CB-02..05, DOOR-06, REQ-05, SEN-03, SEN-04 | AT-01 events: 8 s pickup, 58 s arrival, 64 s dwell end |
+| HA-06 | Faults: FAULT_HOLD between floors (doors locked, passengers kept); ALARM, FIRE and FAULT kept as separate events; return to AUTO only on `RecoveryApproved` **and** passing readiness checks; stale or conflicting sensors never count as safe | SAF-03, EMG-01, EMG-02, EMG-04 (cabin side), SEN-02 | TC-FAULT-01 green |
+| HA-07 | Mission execution: drain onboard passengers; empty handoff only when stationary, count=0 and sensors consistent, else HOLD_PENDING_REVIEW; direct exclusive leg; delivery/unloading confirmation; failed loading | SEN-05, SEN-06, MED-05, FRT-02..04 | AT-04: 44 / 50 / 58 / 64 / 122 s |
 
-Work on final regression and documentation belongs to each person's existing package estimates. An's Sprint 4 work includes checking invariants under generated traces and reviewing the simulator/evaluator boundary; it is part of completing cabin behavior, not an additional 40-point assignment.
+### Huy - Control Center, API, UI
 
-**Critical dependency path:** shared contracts -> deterministic kernel and cabin route receiver -> ordinary dispatch/ownership -> resilient mission service -> stable replay/evaluation -> SATSA results -> approved activation.
+| ID | Package | SRS | Done when |
+|---|---|---|---|
+| HY-01 | Roles and permissions matrix; validate mission requests (floors, type, material, capability); a rejected grant changes nothing; audit log | CC-01, CC-03, FRT-01, 5.3 | `test_control_center.py::auth_*` green |
+| HY-02 | Mission lifecycle: track `MissionStatusUpdate`; persistent UNAVAILABLE + alert; never shows a failed assignment as success | MED-04, EMG-05, CC-02, UI-04 | TC-MED-02 green |
+| HY-03 | Alerts: ALARM is never mapped to MEDICAL; supervisor recovery flow | EMG-01, CC-04, EMG-04 | TC-RECOVERY-01 green |
+| HY-04 | Policy registry: versioned (R, W) recommendations from An, approve/reject, emit `PolicyActivated` | OPT-06, US-016 | Unapproved config changes nothing |
+| HY-05 | FastAPI: REST commands (hall call, destination, mission, fault, recovery, sim start/pause/reset/replay) and a WebSocket snapshot stream | 3.1, 7.8 | Works against fakes |
+| HY-06 | UI screens: Fleet view, Hall panel, Cabin panel, Control Center, Simulation console, Optimization view | UI-01..05, 3.1, 7.8 | All six screens work on fake data first, then on real data |
 
-Prevent sequential blocking with early, small deliveries:
+## 6. Dependencies and integration order
 
-1. By Day 2, merge message types, examples, enums and service stubs so UI and modules can develop against the same fixtures.
-2. Agree the evaluation function's input/output interface in Sprint 1; Hai can implement grid search without waiting for SATSA, and Thanh can test search against a deterministic fake objective.
-3. Use recorded/mock telemetry for early screens, then replace it with authoritative snapshots. The UI never writes cabin or ownership state directly.
-4. Make in-process behavior pass before introducing transport. Route the network and replay paths through the same handlers.
-5. Mark stubbed, unimplemented or unexecuted behavior explicitly. A successful mock does not count as integrated acceptance.
+Before integration nobody waits for anybody except An's framework. Use the fakes.
 
-## 5. Kickoff decisions and first two days
+| Person | Needs from | Until it exists, use |
+|---|---|---|
+| An | nobody | fake `evaluate()` for SATSA development |
+| Thanh | framework | `FakeCabin` (always ACKs) |
+| Hai | framework | contract tests send `RouteProposal`s directly |
+| Huy | framework | fake snapshots via `--dispatch=fake --cabin=fake` |
 
-The following numerical values are **proposed SRS baselines**, pending team sign-off: 2 s/floor, 6 s/served stop, R=3 floors, W=5 s, DELAY_CAP=10 s, AGE_LIMIT=60 s, FULL_LOAD=900 kg and MAX_LOAD=1000 kg. The proposed optimizer domain is R=1..5 and W=0..10, giving 55 integer pairs. Store approved values as versioned configuration rather than scattering constants through modules.
+Integration on Saturday (An runs it; owners stay reachable to fix their module):
 
-| Decision | Lead prepares; everyone reviews | Required outcome |
-| --- | --- | --- |
-| Stack, local run commands, repository host and CI | Hai | One reproducible environment; no unnecessary additional services |
-| Time/motion/door model | An + Hai | Confirm 2 s/floor and 6 s stop accounting, define door transition timing without accidentally double-counting the worked examples |
-| Dispatch policy | Thanh | Confirm R/W, stable tie break, fixed anchor/ETA references, age protection and what counts as materially disadvantaging the anchor |
-| Safety and health policy | An | Define sensor freshness, stopping cutoff, load boundaries, readiness checks, alarm response and the scenario-specific simulated fire response |
-| Mission policy | Huy + An + Thanh | Per-car capabilities; material/payload limits; loading failure, cancellation/escalation and conflicting medical/freight grants; do not abandon occupied passengers |
-| Roles and authentication | Huy | Explicit role/action matrix and backend enforcement; separate user-role changes from mission approval |
-| Communication/reconciliation | Hai + Thanh + An | Command lifetime and timeout clock, read-back of authoritative accepted route/version, changed-payload duplicate rejection, stale ACK handling |
-| Replay contract | Hai | Event priorities, stable IDs/sequences, versioned initial state and ingress traces; no simulation advancement while paused |
-| Optimization study | Thanh + Hai | Obtain/read the cited SATSA paper before implementation; approve mechanisms/adaptation, R/W bounds, lambda/mu, search budget, training/held-out splits and cache keys |
-| Evidence semantics | Hai + all owners | Define pickup wait for canonical calls versus virtual passengers, unserved horizon, P95 method, zero-call scenarios, safe activation boundary and evidence storage |
+| Step | Plug in | Requires | Check |
+|---|---|---|---|
+| ① | Engine (all fakes) | framework | Replay gives an identical log |
+| ② | Thanh's Dispatch + Hai's Cabin | ① | AT-01, AT-02, AT-05 |
+| ③ | Huy's Control Center (missions) | ② | AT-03, AT-04 |
+| ④ | Huy's UI on the real engine | ① (better after ②, ③) | Five cars visible and moving; panels work |
+| ⑤ | Evaluator + grid + SATSA on real modules | ② | AT-06; comparison table |
 
-The cited paper is a future implementation input; this plan does not assert that its full algorithm has already been reviewed or reproduced. The SRS's own pseudocode is the initial integration specification.
+If a module misses 16:00, integration continues with its fake. A late module never blocks the others.
 
-**Day 1:** all four review the SRS invariants and decisions; Hai prepares the skeleton, Thanh the request/route model, An the cabin guards/states, and Huy the role matrix and screen flow. Each person opens their assigned issues.
+## 7. Acceptance tests (oracles from the SRS)
 
-**Day 2:** jointly review and merge the first contract PR, add one shared ordinary-trip fixture and a lost-ACK fixture, verify everyone can run the skeleton, and start the first feature PRs. Record unresolved numerical choices with an owner and resolution date before any dependent behavior is accepted.
+All tests start as NOT RUN. Only an actual run changes that.
 
-## 6. Interface contracts agreed before parallel implementation
+| Test | Setup | Expected | Main owner |
+|---|---|---|---|
+| AT-01 | P1 idle at 31; 27 DOWN at t=0; destination 5 | Pickup 8 s; arrival at 5 at 58 s; dwell ends 64 s; separate pickup and drop-off events | Thanh + Hai |
+| AT-02 | P1 at 31; 27 DOWN at t=0, 29 DOWN at t=2 | Group allowed; 29 at 4 s, 27 at 14 s (+6 s ≤ 10); first assignment attempt immediate | Thanh |
+| TC-DELAY-01 | Committed ETA 20 s; insertion → 26 s, then → 32 s | 26 accepted (+6); 32 rejected (+12 vs **20**, not +6 vs 26) | Thanh |
+| AT-03 | Medical at floor 2; P1 36→40, P2 idle at 12, P3 maintenance, P4 28→22, G1 goods-only | P1=90, P2=20, P4=58; P2 chosen after ACK; P3 and G1 excluded with a reason | Thanh + Huy |
+| AT-04 | P1 carrying 27→5; freight 1→30 | 44 arrival, 50 exit, 58 material pickup, 64 loaded, 122 delivered; no ordinary stops on the leg | Hai + Huy |
+| AT-05 | ACK lost / cabin unsafe | Reservation kept; same `command_id` returns the stored result; changed payload is an error; never two owners | Thanh + Hai |
+| AT-06 | Fixed train/held-out traces; R=1..5, W=0..10 | Every (R, W) valid; violators rejected; SATSA vs grid vs (3,5) reported on held-out | An |
 
-Hai maintains the shared definitions; the producer and consumer jointly review them. Minimum contracts from SRS Sections 3.3-3.4 and Appendix D are:
+Edge cases the contract tests must cover:
 
-| Contract | Producer / handler | Mandatory behavior |
-| --- | --- | --- |
-| SubmitHallCall | Huy's panel -> Thanh's Dispatch | Origin/direction/event ID/sim time; return canonical request ID and pending/assigned state; do not accept an ordinary destination here |
-| RouteProposal / RouteAck | Thanh -> An -> Thanh | Command ID, car ID, expected route version, ordered stops and expiry semantics; versioned ACK or reasoned NACK; unchanged old route on rejection |
-| Authoritative route read-back | An -> Thanh through Hai's adapter | Planned supporting interface for reconciliation: accepted command/route/version evidence, so a timeout cannot create a second owner |
-| CabinTelemetry / ServiceEvent | An -> Dispatch, Control Center and logs | Time, car, continuous position, direction, door/lock, load/count, mode/faults, route version and verified pickup/exit/delivery events |
-| ApproveMission / recovery authorization | Huy -> Dispatch/Cabin | Recorded authorized role, floors/type/material profile and decision ID; no route effect from rejected grants |
-| EvaluateConfiguration | Thanh's search -> Hai's evaluator | Versioned scenario package, seeds, R/W and fixed objective settings; feasible result with metrics or explicit hard-invariant rejection |
-| OptimizationResult / policy activation | Thanh + Hai -> Huy -> Dispatch | Run/input versions, R/W, score, comparisons and approval; future-boundary activation only |
+- exact and just-outside R, W and DELAY_CAP bounds
+- 899 / 900 / 1000 / 1001 kg
+- exactly 1 floor vs less than 1 floor to the stop
+- stale or conflicting sensors
+- all cars busy (call stays PENDING)
+- opposite-direction call
+- late ACK
+- obstruction and door-close at the same timestamp (safety first)
+- low load but passengers > 0
+- no eligible medical car
+- two SATSA points mapping to the same (R, W)
 
-Use an agreed event envelope with event ID, simulation time, category priority, sequence, source, schema version and correlation IDs. Record transport-delay/loss injections in replay inputs. Wall-clock arrival order, UI refresh and animation frames must not become independent sources of simulation decisions. Network behavior is tested against recorded inputs, not assumed to be deterministic by itself.
+## 8. Requirement accountability (all 89 IDs)
 
-## 7. Complete requirement accountability
-
-The following assigns one accountable person to each of the **89 numbered requirements** in the source. Other people still implement their side of a boundary and review it. Requirement count is not the effort estimate.
-
-| Requirement IDs | Accountable owner | Boundary support |
-| --- | --- | --- |
-| DC-01 to DC-06 | Thanh | An supplies authoritative feasibility/health; Huy supplies panel input |
-| CB-01 to CB-05 | An | Thanh supplies routes; Huy supplies cabin interactions |
-| CC-01 to CC-04 | Huy | An supplies recovery readiness; Hai supplies telemetry/audit infrastructure |
-| MED-01 to MED-03 | Thanh | An confirms route and onboard drain; Huy authorizes |
-| MED-04 | Huy | Thanh returns unavailability and reevaluates selection |
-| MED-05 | An | Huy confirms mission boarding; Thanh preserves exclusive scheduling |
-| FRT-01 | Huy | Thanh checks selection capability; An checks local payload |
-| FRT-02 to FRT-04 | An | Huy owns workflow/status and confirmation; Thanh reserves the chosen car |
-| SAF-01 to SAF-03 | An | Thanh reconciles and reassigns unpicked calls |
-| SAF-04 | Thanh | An and Hai provide accepted-version/idempotency evidence |
-| OPT-01 to OPT-03 | Thanh | Huy submits authorized inputs; Hai supplies evaluator interface |
-| OPT-04 to OPT-05 | Hai | Thanh supplies search and live policy; An verifies hard safety guards |
-| OPT-06 | Huy | Thanh activates at a safe boundary; Hai records versions/results |
-| NFR-01 | Huy | Thanh immediately records/attempts assignment; Hai supplies event delivery |
-| NFR-02 | Thanh | An keeps committed routes authoritative |
-| NFR-03 to NFR-06 | Hai | Every domain owner emits required metrics/evidence |
-| SYS-01 | Hai | An instantiates cabin state; Huy renders the fleet |
-| SYS-02 | An | Hai maintains independent event routing |
-| SYS-03 | Thanh | Huy validates panel input; An validates cabin input |
-| SYS-04 | An | Hai supplies only simulated adapters |
-| REQ-01 to REQ-04 | Thanh | An supplies accepted routes; Hai supplies transport behavior |
-| REQ-05 | An | Thanh records pickup; Hai logs distinct lifecycle events |
-| MOVE-01 to MOVE-06 | An | Thanh applies corresponding dispatch-side insertion screens |
-| DOOR-01 to DOOR-06 | An | Huy exposes guarded passenger actions |
-| SEN-01 to SEN-06 | An | Hai orders timestamped sensor events |
-| EMG-01 | Huy | An emits distinct local alarm/fire/fault events |
-| EMG-02 | An | Huy receives persistent fault alerts |
-| EMG-03 | Thanh | An reports faults and recovery health |
-| EMG-04 to EMG-05 | Huy | An gates recovery; Thanh retries eligible medical selection |
-| SIM-01 to SIM-05 | Hai | Huy controls sessions; Thanh retains pending requests |
-| SIM-06 | An | Hai delivers commands; Thanh retains command identity |
-| SIM-07 | Thanh | An exposes accepted version; Hai simulates missing ACK |
-| SIM-08 | Hai | An's adapters publish feedback without changing ownership |
-| UI-01 to UI-05 | Huy | All owners provide authoritative state |
-| LOG-01 to LOG-04 | Hai | All owners emit their own domain/audit events |
-
-### Story coverage
-
-| SRS story | Delivery lead | Required collaborators | Gate |
-| --- | --- | --- | --- |
-| US-001 Building/fleet | Hai | An, Huy | R1 |
-| US-002 Simulation controls/replay | Hai | Huy | R1, extended through R3 |
-| US-003 Hall call | Thanh | Huy | R1 |
-| US-004 Boarding/destination | An | Huy, Thanh | R2 |
-| US-005 Feasible cabin choice | Thanh | An | R2 |
-| US-006 Direction grouping | Thanh | An | R3 |
-| US-007 Unique ownership | Thanh | An, Hai | R2, fault/timeout verification in R3 |
-| US-008 Door interlocks | An | Hai | R2 |
-| US-009 Obstruction handling | An | Hai | R2 |
-| US-010 Fault and recovery | An | Thanh, Huy, Hai | R3 |
-| US-011 Medical mission | Huy | Thanh, An | R4 |
-| US-012 Freight mission | Huy | An, Thanh | R4 |
-| US-013 Fleet/mission monitoring | Huy | Hai, An | R3, mission extension in R4 |
-| US-014 Versioned route protocol | Hai | An, Thanh | R2-R3 |
-| US-015 SATSA tuning | Thanh | Hai, An | R5 |
-| US-016 Optimized policy approval | Huy | Thanh, Hai | R5 |
-
-## 8. Acceptance gates and evidence
-
-Every package owner writes the tests for their own behavior. Integration checks exercise boundaries with the affected owners. Record test ID, requirement IDs, code revision, input trace/configuration/seed, expected result, actual result, PASS/FAIL/NOT RUN and evidence location. Begin with NOT RUN; only execution changes that status.
-
-| Gate/check | Required observable result | Evidence lead |
-| --- | --- | --- |
-| R1: model/input | Floors 1-40 and P1-P4/G1 exist; reject floor 0/41, DOWN at 1 and UP at 40; duplicate active calls keep ID and original timestamp | Hai + Thanh |
-| R1: clock/replay | PAUSE freezes time, movement, door transitions and scheduled execution; reset/replay of the same initial state, trace, model/policy versions and seed reproduces ordered domain events | Hai |
-| R2: ordinary trip, AT-01 | Isolated P1 at 31, 27/DOWN at t=0: pickup t=8; after 6 s pickup stop and selection of 5, destination arrival t=58; final dwell ends t=64; pickup and drop-off are separate events | An + Thanh |
-| R2: doors/capacity | Never move before confirmed locked doors; reopen on closing obstruction; reject door-open between floors; at 900 kg bypass new ordinary pickups; above 1000 kg block departure; preserve onboard trips | An |
-| R2/R3: ownership, AT-05 | Lost/delayed ACK keeps reservation; retry of same ID/payload returns original result; changed payload with same ID is an error; stale expected version NACKs; no second owner before authoritative reconciliation | Thanh + An + Hai |
-| R3: grouping, AT-02 | Scenario P1 at 31 with 27/DOWN at t=0 and 29/DOWN at t=2: safe grouping can reach 29 at t=4 and 27 at t=14, adding 6 s to floor-27 pickup; first assignment attempt is immediate | Thanh |
-| R3: cumulative delay | Original commitment t=20 -> candidate t=26 is +6 and may pass; subsequent t=32 is +12 against 20 and must fail, even though it is only +6 against 26 | Thanh |
-| R3: resilience | Fault between floors stops motion, keeps doors locked and retains passengers; unpicked external calls are safely reconciled/reassigned with age intact; low load plus nonzero passenger count never proves an empty handoff | An + Thanh |
-| R4: medical, AT-03 | Scenario ETAs P1=90 s, P2=20 s, P4=58 s: choose P2 after ACK; exclude maintenance P3 and goods-only G1 for that scenario; no eligible car produces persistent UNAVAILABLE and alert | Thanh + Huy |
-| R4: freight, AT-04 | Isolated P1 occupied 27->5, then freight 1->30: passenger arrival t=44, exit complete t=50, material pickup t=58, loading complete t=64, freight arrival t=122; ordinary pickups excluded from direct leg | An + Huy |
-| R4: grants/recovery | Unauthorized or invalid grants leave routes unchanged; alarm never self-grants MEDICAL; supervisor approval alone cannot restore an unhealthy cabin; readiness checks and local veto remain necessary | Huy + An |
-| R5: optimizer, AT-06 | Validate/project R/W, reject any invariant-breaking run rather than penalize it, compare SATSA with fixed (3,5) and full approved grid, and report held-out metrics using identical scenarios/seeds | Thanh + Hai |
-| R5: approval | Unapproved recommendation changes nothing; approved version activates only at the agreed future boundary and does not rewrite accepted routes or commitment references | Huy + Thanh |
-| Final: reproducibility | Clean local start, working UI and networked boundaries, saved scenarios, tests/evidence, archived optimizer inputs/results, and a tagged demonstration version | All four; Hai coordinates |
-
-The arithmetic examples use isolated initial fleets and the SRS's simplified timing assumptions. They are test oracles, not measured physical performance. Keep the stated door/dwell accounting consistent with those oracles.
-
-Also cover exact grouping bounds and just-outside bounds; fixed rather than sliding group anchors; exactly 10 s versus greater delay; 899/900/1000/1001 kg; exactly one floor versus less than one floor stopping distance; stale/missing/conflicting sensors; all cars busy; opposite-direction calls; expired commands and late ACKs; simultaneous safety/movement events; mission interruption; medical/freight conflicts; duplicate projected optimizer candidates; empty traffic sets; and no feasible configuration. At age 60 s, test protection/reevaluation, not a guaranteed pickup deadline.
-
-For research, record mean, median, P95 and maximum pickup wait; unserved fraction/count; onboard delay violations; medical pickup and freight completion; dispatch wall time; offline evaluation cost; seeds, scenario/model/policy versions and approval decisions. Report all feasible compared methods on held-out data after selection. Any change based on those results requires a fresh held-out set for an unbiased final evaluation.
+| IDs | Owner |
+|---|---|
+| DC-01..06, REQ-01..04, SAF-04, SYS-03, SIM-07, MED-01..03, EMG-03, NFR-02 | Thanh |
+| CB-01..05, MOVE-01..06, DOOR-01..06, SEN-01..06, SAF-01..03, SYS-02, SYS-04, REQ-05, MED-05, FRT-02..04, EMG-02, SIM-06 | Hai |
+| CC-01..04, MED-04, FRT-01, EMG-01, EMG-04, EMG-05, UI-01..05, OPT-06, NFR-01 | Huy |
+| SYS-01, SIM-01..05, SIM-08, LOG-01..04, NFR-03..06, OPT-01..05 | An |
 
 ## 9. Definition of Done and scope control
 
-A package is Done only when its implementation and relevant success/error/boundary checks are reviewed, acceptance evidence is recorded, requirement/story links are current, the integrated build passes, and run/design notes are updated. A screenshot alone does not demonstrate ownership, safety or replay correctness.
+A package is **Done** when:
 
-Each person supplies their own module explanation and a short demonstration. The final presentation covers Thanh's dispatch/search, An's cabin/safety, Huy's operator/passenger workflows, and Hai's reproducibility/evaluation. The integration steward coordinates a release rather than inheriting unfinished work from other people.
+- its contract tests and own unit tests pass;
+- it runs in the integrated app;
+- its PR is merged with AI notes;
+- any SRS ambiguity it hit is recorded in `DECISIONS.md`.
 
-If the schedule slips, reduce presentation extras first: decorative animation, extra dashboards, optional exports, additional scenario catalogs and optional indexing structures. Keep the SRS's P0 safety/contracts and P1 service/research scope visible. Any removal or deferral of gRPC, mission behavior or SATSA is an explicit scope decision, recorded as deferred or NOT RUN; it is not silently treated as a complete v1.1 implementation.
+If time runs out, cut in this order:
 
-The merge, review, conflict-resolution and release policy is in [CONTRIBUTING.md](CONTRIBUTING.md). These documents define the proposed process; remote branch protections and CI still need to be configured after the repository and stack decisions.
+1. UI polish
+2. Optimization view styling
+3. Extra traffic scenarios
+4. SATSA, but keep the grid search
+5. Fire behaviour
+
+Never cut:
+
+- door interlocks
+- single ownership
+- the DELAY_CAP reference rule
+- deterministic replay
+
+Anything cut is listed as **deferred** in the README, not presented as done.
