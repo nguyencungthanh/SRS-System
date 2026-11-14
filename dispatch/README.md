@@ -4,7 +4,8 @@ Scope: TH-01 through TH-06 in `PROJECT_PLAN.md`. Runtime code imports only
 `contracts`, the Python standard library, and this package. No dependencies or
 shared contracts are changed.
 
-All six work packages are implemented and verified locally on `thanh-dev`.
+All six work packages are implemented and verified on
+`thanh/th-01-dispatch-controller`.
 
 ## Implementation plan and requirement map
 
@@ -71,4 +72,5 @@ packages do not yet exist. Dispatch contracts have no skips. Acceptance integrat
 uses real Dispatch with the shared fake Cabin and Control Center; validation with
 their future real implementations remains part of the team's integration phase.
 
-The implementation is ready for team PR review and merge from `thanh-dev`.
+The implementation is ready for team PR review and merge from
+`thanh/th-01-dispatch-controller`.
