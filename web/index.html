@@ -152,14 +152,63 @@
         </div>
       </div>
 
+      <!-- UI-02 Hall panel -->
       <div class="panel" data-panel="hall" role="tabpanel" hidden>
-        <p class="later">The hall panel (UP/DOWN buttons on each floor) is built in the next step.</p>
+        <p class="hint">The call buttons on each landing. Anyone can press them. A button lights
+          amber when the call is accepted and fills in once a car owns it.</p>
+        <div id="hall-panel" class="hall-grid"></div>
       </div>
+
+      <!-- UI-03 Cabin panel -->
       <div class="panel" data-panel="cabin" role="tabpanel" hidden>
-        <p class="later">The cabin panel (destination, door and alarm buttons) is built in the next step.</p>
+        <div class="car-picker" role="radiogroup" aria-label="Car" id="cabin-cars"></div>
+        <div class="cabin">
+          <div class="cabin-display" aria-live="polite">
+            <span id="cabin-floor" class="cabin-floor">-</span>
+            <span id="cabin-dir" class="cabin-dir"></span>
+            <span id="cabin-status" class="cabin-status"></span>
+          </div>
+          <p class="hint">Buttons inside the car are pressed as the passenger below.
+            A destination is only accepted from a passenger who is on board.</p>
+          <label class="who">Passenger <input id="cabin-pax" value="PAX-1" maxlength="20"></label>
+          <div id="cabin-buttons" class="cabin-buttons"></div>
+          <div class="cabin-row">
+            <button type="button" data-door="true">Open door</button>
+            <button type="button" data-door="false">Close door</button>
+            <button type="button" class="alarm" data-alarm>Alarm</button>
+          </div>
+        </div>
+        <form id="board-form" class="block form">
+          <h3>Put a passenger in or out of this car</h3>
+          <p class="hint">A simulation step for the operator: it stands for someone walking in or out.</p>
+          <label>Weight (kg) <input name="weight_kg" type="number" min="1" value="75"></label>
+          <button type="submit" name="op" value="board">Passenger boards</button>
+          <button type="submit" name="op" value="exit">Passenger leaves</button>
+        </form>
       </div>
+
+      <!-- OPT-06 Optimization view -->
       <div class="panel" data-panel="opt" role="tabpanel" hidden>
-        <p class="later">The optimization view is built in the next step. It can only show the active policy until the snapshot carries recommendations.</p>
+        <div class="block">
+          <h3>Active grouping policy</h3>
+          <dl id="policy" class="metrics"></dl>
+        </div>
+        <div class="block form">
+          <h3>Run an optimization</h3>
+          <p class="hint">Not available yet: the simulation has no way to start a run. Waiting on the framework.</p>
+          <label>Method
+            <select id="opt-method"><option>SATSA</option><option>GRID</option></select>
+          </label>
+          <button type="button" data-optimize>Run optimization</button>
+        </div>
+        <form id="policy-form" class="block form">
+          <h3>Approve or reject a recommended policy</h3>
+          <p class="hint">Supervisor only. Recommendations are not shown here yet, so type the run
+            number from the event log (for example RUN-0001). Nothing changes until a supervisor approves.</p>
+          <label>Run <input name="run_id" placeholder="RUN-0001" required></label>
+          <button type="submit" name="op" value="approve">Approve policy</button>
+          <button type="submit" name="op" value="reject">Reject policy</button>
+        </form>
       </div>
     </section>
   </main>

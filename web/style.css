@@ -313,3 +313,92 @@ td.row-actions { display: table-cell; }
   .hoistway { grid-template-columns: 1.8rem repeat(5, 1fr) 3rem; gap: 3px; }
   .role-picker { margin-left: 0; }
 }
+
+/* --- UI-02 hall panel: one landing plate per floor ------------------------------- */
+
+.hall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr));
+  gap: 6px;
+}
+.landing {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0.3rem 0.4rem;
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.landing .num { font-weight: 600; font-variant-numeric: tabular-nums; }
+.landing .btns { display: flex; flex-direction: column; gap: 3px; }
+.call-btn {
+  width: 1.9rem; height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--ink);
+  border-radius: 50% / 40%;
+  background: var(--plate);
+  cursor: pointer;
+  line-height: 1;
+}
+.call-btn[data-lit="pending"] { box-shadow: 0 0 0 2px var(--lantern); color: #a86a00; }
+.call-btn[data-lit="owned"] { background: var(--lantern); border-color: #a86a00; }
+.call-btn[hidden] { display: block; visibility: hidden; }
+
+/* --- UI-03 cabin panel: the panel inside the car ---------------------------------- */
+
+.car-picker { display: flex; gap: 4px; margin-bottom: 0.75rem; }
+.car-picker button {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+.car-picker button[aria-checked="true"] { background: var(--ink); color: var(--plate); }
+
+.cabin {
+  max-width: 30rem;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(160deg, #c9d0d5, #e6eaed 45%, #bfc7cc);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.cabin-display {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  margin-bottom: 0.75rem;
+  background: var(--ink);
+  border-radius: 3px;
+  color: var(--lantern);
+}
+.cabin-floor { font-size: 2.2rem; font-weight: 600; font-stretch: condensed; font-variant-numeric: tabular-nums; min-width: 2.5ch; }
+.cabin-dir { font-size: 1.4rem; }
+.cabin-status { margin-left: auto; font-size: 0.85rem; color: #d5dde2; }
+.cabin .who { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; font-size: 0.9rem; }
+.cabin .who input { width: 8rem; padding: 0.2rem 0.4rem; border: 1px solid var(--rule); border-radius: 3px; }
+
+.cabin-buttons { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; margin-bottom: 0.75rem; }
+.dest-btn {
+  aspect-ratio: 1;
+  border: 1px solid #7d8a92;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #d4dade);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.dest-btn[data-lit="true"] { box-shadow: 0 0 0 2px var(--lantern), 0 0 8px var(--lantern); color: #8a5600; }
+.cabin-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.cabin-row button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background: var(--plate);
+  cursor: pointer;
+}
+.cabin-row .alarm { margin-left: auto; background: var(--alarm); border-color: var(--alarm); color: #fff; }

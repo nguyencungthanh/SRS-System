@@ -73,13 +73,15 @@ function toast(text, ok) {
 
 // --- talking to the API -------------------------------------------------------------
 
-async function send(path, body = {}, doneText = "Sent") {
+// ``asRole`` overrides the top-bar role, e.g. buttons inside a car are pressed by a passenger
+// (Huy's choice, 14/11). The API and the modules still check every role.
+async function send(path, body = {}, doneText = "Sent", asRole = null) {
   let response;
   try {
     response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: role(), ...body }),
+      body: JSON.stringify({ role: asRole || role(), ...body }),
     });
   } catch {
     toast("The server is not reachable. Is python -m app still running?", false);
@@ -88,6 +90,8 @@ async function send(path, body = {}, doneText = "Sent") {
   const result = await response.json().catch(() => ({ ok: false }));
   if (result.ok) {
     toast(doneText, true);
+  } else if (response.status === 501) {
+    toast("Not available yet: the simulation cannot start an optimization run.", false);
   } else {
     toast(REASON_TEXT[result.reason] || result.detail || `Refused (${response.status}).`, false);
   }
@@ -294,6 +298,85 @@ function renderConsole(snap) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
+
+// --- UI-02 hall panel ---------------------------------------------------------------
+
+function buildHallPanel() {
+  const grid = $("#hall-panel");
+  for (let f = FLOORS; f >= 1; f -= 1) {
+    const landing = document.createElement("div");
+    landing.className = "landing";
+    // No UP at the top floor and no DOWN at the ground floor, like a real landing (REQ-02).
+    landing.innerHTML = `<span class="num">${f}</span><span class="btns">
+      <button type="button" class="call-btn" data-call="UP" data-floor="${f}" aria-label="Floor ${f} up" ${f === FLOORS ? "hidden" : ""}>▲</button>
+      <button type="button" class="call-btn" data-call="DOWN" data-floor="${f}" aria-label="Floor ${f} down" ${f === 1 ? "hidden" : ""}>▼</button>
+    </span>`;
+    grid.append(landing);
+  }
+}
+
+function renderHall(snap) {
+  const lit = new Map();
+  for (const c of snap.calls) {
+    if (c.status === "SERVED") continue;
+    const owned = c.status === "ASSIGNED" || c.status === "RESERVED";
+    lit.set(`${c.floor}:${c.direction}`, owned ? "owned" : "pending");
+  }
+  $$(".call-btn").forEach((b) => {
+    const state = lit.get(`${b.dataset.floor}:${b.dataset.call}`);
+    if (state) b.dataset.lit = state; else delete b.dataset.lit;
+  });
+}
+
+// --- UI-03 cabin panel --------------------------------------------------------------
+
+let cabinCar = CARS[0];
+
+function buildCabinPanel() {
+  const picker = $("#cabin-cars");
+  picker.innerHTML = CARS.map((c) => (
+    `<button type="button" role="radio" aria-checked="${c === cabinCar}" data-cabin-car="${c}">${c}</button>`
+  )).join("");
+  const pad = $("#cabin-buttons");
+  pad.innerHTML = Array.from({ length: FLOORS }, (_, i) => i + 1).map((f) => (
+    `<button type="button" class="dest-btn" data-dest="${f}" aria-label="Go to floor ${f}">${f}</button>`
+  )).join("");
+}
+
+function selectCabinCar(car) {
+  cabinCar = car;
+  $$("#cabin-cars button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cabinCar === car)));
+  if (lastSnapshot) renderCabin(lastSnapshot);
+}
+
+function renderCabin(snap) {
+  const car = snap.cars.find((c) => c.car_id === cabinCar);
+  if (!car) return;
+  $("#cabin-floor").textContent = car.floor_display;
+  $("#cabin-dir").textContent = car.direction === "IDLE" ? "" : ARROW[car.direction];
+  const over = car.load_kg > MAX_LOAD_KG ? ", overload" : car.load_kg >= FULL_LOAD_KG ? ", full" : "";
+  $("#cabin-status").textContent =
+    `door ${car.door.toLowerCase()}, ${car.passengers} aboard, ${fmt(car.load_kg, 0)} kg${over}, ${car.mode}`;
+  const wanted = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
+  $$(".dest-btn").forEach((b) => { b.dataset.lit = String(wanted.has(Number(b.dataset.dest))); });
+}
+
+function passengerId() {
+  return $("#cabin-pax").value.trim() || "PAX-1";
+}
+
+// --- OPT-06 optimization view -------------------------------------------------------
+
+function renderPolicy(snap) {
+  const p = snap.policy;
+  const tiles = [
+    ["Version", p.version],
+    ["Group span R", `${p.R} floors`],
+    ["Time window W", `${p.W} s`],
+  ];
+  $("#policy").innerHTML = tiles.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
+}
+
 // --- render everything --------------------------------------------------------------
 
 function render(snap) {
@@ -308,6 +391,9 @@ function render(snap) {
   renderAlerts(snap);
   renderMissions(snap);
   renderConsole(snap);
+  renderHall(snap);
+  renderCabin(snap);
+  renderPolicy(snap);
 }
 
 // --- wiring ---------------------------------------------------------------------------
@@ -372,9 +458,40 @@ function wireForms() {
       clear ? "Fault cleared." : "Fault injected.");
   });
 
+  $("#board-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const leave = event.submitter && event.submitter.value === "exit";
+    const body = { car_id: cabinCar, passenger_id: passengerId() };
+    if (!leave) body.weight_kg = number(event.target.weight_kg.value);
+    send(leave ? "/passenger/exit" : "/passenger/board", body,
+      leave ? `${body.passenger_id} left ${cabinCar}.` : `${body.passenger_id} boarded ${cabinCar}.`);
+  });
+
+  $("#policy-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const approve = !(event.submitter && event.submitter.value === "reject");
+    send("/policy/approve", { run_id: event.target.run_id.value.trim(), approve },
+      approve ? "Policy approval sent." : "Policy rejection sent.");
+  });
+
   document.addEventListener("click", (event) => {
     const t = event.target.closest("button");
     if (!t) return;
+    if (t.dataset.call) {
+      send("/hall-call", { floor: Number(t.dataset.floor), direction: t.dataset.call },
+        `Call sent: floor ${t.dataset.floor} ${t.dataset.call.toLowerCase()}.`);
+    }
+    if (t.dataset.cabinCar) selectCabinCar(t.dataset.cabinCar);
+    if (t.dataset.dest) {
+      send("/destination", { car_id: cabinCar, floor: Number(t.dataset.dest), passenger_id: passengerId() },
+        `Floor ${t.dataset.dest} pressed in ${cabinCar}.`, "PASSENGER");
+    }
+    if (t.dataset.door) {
+      send("/door", { car_id: cabinCar, open: t.dataset.door === "true" },
+        t.dataset.door === "true" ? "Door open pressed." : "Door close pressed.", "PASSENGER");
+    }
+    if (t.hasAttribute("data-alarm")) send("/alarm", { car_id: cabinCar }, `Alarm pressed in ${cabinCar}.`, "PASSENGER");
+    if (t.hasAttribute("data-optimize")) send("/optimization/run", { method: $("#opt-method").value }, "Optimization started.");
     if (t.dataset.ack) send("/alert/ack", { alert_id: t.dataset.ack }, "Alert acknowledged.");
     if (t.dataset.confirm) {
       send("/mission/confirm", { mission_id: t.dataset.mission, car_id: t.dataset.car, action: t.dataset.confirm },
@@ -398,6 +515,8 @@ function wireForms() {
 }
 
 buildHoistway();
+buildHallPanel();
+buildCabinPanel();
 fillCarSelects();
 wireTabs();
 wireForms();
