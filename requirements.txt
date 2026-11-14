@@ -1,0 +1,7 @@
+# Locked stack (PROJECT_PLAN.md, Section 2). Pinned by An.
+# Do not add a package without telling An.
+fastapi==0.162.7
+uvicorn==0.54.0
+httpx==0.28.1
+pytest==9.2.0
+ruff==0.17.5
