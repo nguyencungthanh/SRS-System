@@ -1,0 +1,315 @@
+/* Smart Elevator System - control room.
+   Steel faceplates, amber hall lanterns, red only for faults and alarms.
+   Bahnschrift is the DIN signage face that ships with Windows. */
+
+:root {
+  --steel: #d9dee2;      /* page: machine-room steel */
+  --plate: #eef1f3;      /* faceplates */
+  --ink: #17232b;        /* text, car bodies */
+  --muted: #5b6b75;      /* secondary text */
+  --rule: #b9c2c8;       /* plate edges */
+  --lantern: #f0a830;    /* hall lanterns, floor indicators */
+  --alarm: #c4302b;      /* faults, alarms, refused */
+  --shaft: #2a3740;      /* hoistway interior */
+  --ok: #2f7d55;         /* served / done */
+  --floor-h: 15px;       /* one floor in the hoistway */
+  --font: "Bahnschrift", "DIN Alternate", "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--steel);
+  color: var(--ink);
+  font: 15px/1.45 var(--font);
+}
+
+button, input, select { font: inherit; color: inherit; }
+
+:focus-visible { outline: 3px solid var(--lantern); outline-offset: 2px; }
+
+/* --- top bar ---------------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--ink);
+  color: var(--plate);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-stretch: condensed;
+  letter-spacing: 0.01em;
+}
+
+.session { display: flex; gap: 1rem; flex-wrap: wrap; }
+.session strong { color: var(--lantern); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.state { padding: 0 0.5rem; border: 1px solid currentColor; border-radius: 3px; }
+.state[data-state="RUNNING"] { color: var(--lantern); }
+.state[data-state="STOPPED"] { color: #ff8a80; }
+
+.role-picker { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+.role-picker select { background: var(--plate); color: var(--ink); border: 0; border-radius: 3px; padding: 0.2rem 0.4rem; }
+
+.link { font-size: 0.85rem; opacity: 0.8; }
+.link[data-mode="poll"] { color: var(--lantern); opacity: 1; }
+.link[data-mode="down"] { color: #ff8a80; opacity: 1; }
+
+/* --- layout ----------------------------------------------------------------------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(520px, 0.95fr) 1fr;
+  gap: 1rem;
+  padding: 1rem 1.25rem 2rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+h2, h3 { margin: 0 0 0.5rem; font-weight: 600; font-stretch: condensed; }
+h2 { font-size: 1.3rem; }
+h3 { font-size: 1.05rem; }
+
+.fleet, .work { background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; padding: 1rem; }
+
+/* --- hoistway: the one bold element --------------------------------------------- */
+
+.hoistway {
+  --floors: 40;
+  display: grid;
+  grid-template-columns: 2.2rem repeat(5, 1fr) 4.5rem;
+  gap: 6px;
+  height: calc(var(--floors) * var(--floor-h));
+  margin-bottom: 1rem;
+}
+
+.floor-scale, .lanterns { position: relative; }
+
+.floor-scale span, .lanterns .lantern {
+  position: absolute;
+  left: 0; right: 0;
+  height: var(--floor-h);
+  font-size: 0.7rem;
+  line-height: var(--floor-h);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.floor-scale span { text-align: right; padding-right: 4px; }
+
+.shaft {
+  position: relative;
+  background:
+    repeating-linear-gradient(to bottom, transparent 0 calc(var(--floor-h) - 1px), #36454f calc(var(--floor-h) - 1px) var(--floor-h)),
+    var(--shaft);
+  border-radius: 2px;
+}
+
+.shaft-label {
+  position: absolute;
+  top: -1.4rem; left: 0; right: 0;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.stop-mark {
+  position: absolute;
+  left: 3px;
+  width: 6px; height: 6px;
+  margin-top: calc((var(--floor-h) - 6px) / 2);
+  border-radius: 50%;
+  background: var(--lantern);
+}
+.stop-mark[data-kind^="MISSION"] { background: #7fb2ff; }
+
+.car {
+  position: absolute;
+  left: 12%; right: 12%;
+  height: calc(var(--floor-h) * 1.6);
+  margin-top: calc(var(--floor-h) * -0.8);
+  background: var(--plate);
+  border: 2px solid var(--plate);
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: top 0.25s linear;
+}
+
+@media (prefers-reduced-motion: reduce) { .car { transition: none; } }
+
+/* split doors: two leaves that slide apart */
+.car::before, .car::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 50%;
+  background: #aab6bd;
+  transition: transform 0.3s ease;
+}
+.car::before { left: 0; border-right: 1px solid var(--ink); }
+.car::after { right: 0; border-left: 1px solid var(--ink); }
+.car[data-door="OPEN"]::before { transform: translateX(-85%); }
+.car[data-door="OPEN"]::after { transform: translateX(85%); }
+.car[data-door="OPENING"]::before, .car[data-door="CLOSING"]::before, .car[data-door="OBSTRUCTED"]::before { transform: translateX(-45%); }
+.car[data-door="OPENING"]::after, .car[data-door="CLOSING"]::after, .car[data-door="OBSTRUCTED"]::after { transform: translateX(45%); }
+
+.car .readout {
+  position: relative;
+  z-index: 1;
+  padding: 0 3px;
+  background: var(--ink);
+  color: var(--lantern);
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 2px;
+}
+
+.car[data-mode="FAULT_HOLD"], .car[data-mode="OVERLOAD_HOLD"], .car[data-mode="FIRE"] { border-color: var(--alarm); }
+.car[data-mode^="MISSION"] { border-color: #7fb2ff; }
+.car[data-mode="FAULT_HOLD"] .readout { color: #ffb4ae; }
+.car[data-mode="MAINTENANCE"] { border-style: dashed; border-color: var(--lantern); }
+.car[data-stale="true"] { opacity: 0.45; }
+
+.lantern { display: flex; gap: 2px; padding-left: 4px; white-space: nowrap; }
+.lantern b { font-weight: 600; }
+.lantern .pending { color: var(--lantern); }
+.lantern .assigned { color: var(--ink); background: var(--lantern); padding: 0 2px; border-radius: 2px; }
+
+/* --- tables ----------------------------------------------------------------------- */
+
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 0.85rem; border-bottom: 1px solid var(--rule); padding: 0.25rem 0.4rem; }
+td { padding: 0.3rem 0.4rem; border-bottom: 1px solid #dde2e5; vertical-align: top; }
+
+.cars td:first-child { font-weight: 600; }
+.warn { color: var(--alarm); font-weight: 600; }
+.quiet { color: var(--muted); }
+.fault-list { color: var(--alarm); font-size: 0.85rem; }
+
+.status { padding: 0 0.35rem; border-radius: 3px; background: #dfe5e9; white-space: nowrap; }
+.status[data-status="UNAVAILABLE"], .status[data-status="REJECTED"], .status[data-status="FAILED"],
+.status[data-status="HOLD_PENDING_REVIEW"] { background: var(--alarm); color: #fff; }
+.status[data-status="COMPLETED"], .status[data-status="SERVED"] { background: var(--ok); color: #fff; }
+.status[data-status="PENDING"] { background: transparent; outline: 1px solid var(--lantern); }
+.status[data-status="ASSIGNED"], .status[data-status="RESERVED"], .status[data-status="IN_PROGRESS"] { background: var(--lantern); }
+
+.excluded { font-size: 0.8rem; color: var(--muted); }
+
+/* --- tabs and panels -------------------------------------------------------------- */
+
+.tabs { display: flex; gap: 2px; border-bottom: 2px solid var(--ink); margin-bottom: 1rem; flex-wrap: wrap; }
+.tabs button {
+  border: 0;
+  background: transparent;
+  padding: 0.45rem 0.85rem;
+  border-radius: 3px 3px 0 0;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--plate); }
+
+.block { margin-bottom: 1.5rem; }
+.hint, .later { color: var(--muted); margin: 0 0 0.5rem; max-width: 70ch; }
+
+.form, .controls { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: end; }
+.form h3, .form .hint, .controls h3 { flex-basis: 100%; }
+.form label, .controls label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); }
+.form input, .form select, .controls input, .controls select {
+  min-width: 7rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: #fff;
+}
+.form input[type="number"], .controls input[type="number"] { width: 6rem; min-width: 0; }
+
+button[type="submit"], .controls button, .form button, .row-actions button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--plate);
+  cursor: pointer;
+}
+.row-actions button { padding: 0.1rem 0.45rem; font-size: 0.8rem; background: transparent; color: var(--ink); }
+button:hover { filter: brightness(1.15); }
+
+.freight-only[hidden] { display: none; }
+
+/* --- alerts, metrics, log --------------------------------------------------------- */
+
+.alerts { list-style: none; margin: 0; padding: 0; }
+.alerts li {
+  display: grid;
+  grid-template-columns: 7rem 1fr auto;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.4rem 0.5rem;
+  border-left: 4px solid var(--alarm);
+  background: #fff;
+  margin-bottom: 4px;
+}
+.alerts li[data-ack="true"] { border-left-color: var(--rule); color: var(--muted); }
+.alerts .kind { font-weight: 600; }
+.alerts .empty { border-left-color: var(--ok); color: var(--muted); grid-template-columns: 1fr; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 0.5rem; margin: 0; }
+.metrics div { background: #fff; padding: 0.4rem 0.6rem; border-radius: 3px; }
+.metrics dt { font-size: 0.8rem; color: var(--muted); }
+.metrics dd { margin: 0; font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.events {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.5rem 2.2rem;
+  max-height: 18rem;
+  overflow: auto;
+  background: var(--ink);
+  color: #d5dde2;
+  font-size: 0.8rem;
+  border-radius: 3px;
+  white-space: pre-wrap;
+}
+
+/* --- toast ------------------------------------------------------------------------ */
+
+.toast {
+  position: fixed;
+  right: 1.25rem; bottom: 1.25rem;
+  max-width: 26rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--plate);
+  border-left: 4px solid var(--ok);
+}
+.toast[data-ok="false"] { border-left-color: var(--alarm); }
+
+/* --- density fixes after the first screenshot review ------------------------------ */
+
+.cars, .list { font-size: 0.9rem; }
+.cars td:first-child, .cars td:last-child, .list td:first-child, .status { white-space: nowrap; }
+.cars .quiet { font-size: 0.8rem; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+td.row-actions { min-width: 9rem; }
+td.row-actions button { margin: 0 2px 4px 0; }
+td.row-actions { display: table-cell; }
+
+/* narrow screens: let the panels shrink and tables scroll sideways */
+.layout > * { min-width: 0; }
+.fleet, .work { overflow-x: auto; }
+@media (max-width: 600px) {
+  .layout { padding: 0.5rem; }
+  .hoistway { grid-template-columns: 1.8rem repeat(5, 1fr) 3rem; gap: 3px; }
+  .role-picker { margin-left: 0; }
+}

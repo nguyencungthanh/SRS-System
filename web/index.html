@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Elevator System - Control room</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Smart Elevator System</h1>
+    <div class="session" aria-live="polite">
+      <span id="sim-state" class="state">-</span>
+      <span>t = <strong id="sim-time">0.0</strong> s</span>
+      <span>seed <strong id="sim-seed">-</strong></span>
+      <span>policy <strong id="sim-policy">-</strong></span>
+    </div>
+    <label class="role-picker">Acting as
+      <select id="role">
+        <option value="OPERATOR">Operator</option>
+        <option value="SUPERVISOR">Supervisor</option>
+        <option value="MEDICAL_COORDINATOR">Medical coordinator</option>
+        <option value="BUILDING_STAFF">Building staff</option>
+        <option value="MAINTAINER">Maintainer</option>
+        <option value="PASSENGER">Passenger</option>
+      </select>
+    </label>
+    <span id="link" class="link">Connecting…</span>
+  </header>
+
+  <main class="layout">
+    <!-- UI-01 Fleet view -->
+    <section class="fleet" aria-labelledby="fleet-title">
+      <h2 id="fleet-title">Fleet</h2>
+      <div class="hoistway" id="hoistway" role="img" aria-label="Positions of the five cars and the hall calls"></div>
+      <table class="cars">
+        <thead>
+          <tr><th>Car</th><th>Floor</th><th>Going</th><th>Door</th><th>Load</th><th>Mode</th><th>Route</th><th>Mission</th></tr>
+        </thead>
+        <tbody id="car-rows"></tbody>
+      </table>
+    </section>
+
+    <section class="work">
+      <nav class="tabs" role="tablist" aria-label="Screens">
+        <button role="tab" aria-selected="true" data-tab="cc">Control Center</button>
+        <button role="tab" aria-selected="false" data-tab="sim">Simulation</button>
+        <button role="tab" aria-selected="false" data-tab="hall">Hall panel</button>
+        <button role="tab" aria-selected="false" data-tab="cabin">Cabin panel</button>
+        <button role="tab" aria-selected="false" data-tab="opt">Optimization</button>
+      </nav>
+
+      <!-- UI-04 Control Center -->
+      <div class="panel" data-panel="cc" role="tabpanel">
+        <div class="block">
+          <h3>Alerts</h3>
+          <ul id="alerts" class="alerts"></ul>
+        </div>
+
+        <div class="block">
+          <h3>Missions</h3>
+          <table class="list">
+            <thead><tr><th>Mission</th><th>Type</th><th>From → to</th><th>Status</th><th>Car</th><th>Why</th><th></th></tr></thead>
+            <tbody id="missions"></tbody>
+          </table>
+        </div>
+
+        <form id="mission-form" class="block form">
+          <h3>Request a mission</h3>
+          <p class="hint">Medical missions need the medical coordinator role, freight needs building staff.</p>
+          <label>Type
+            <select name="mission_type">
+              <option value="MEDICAL">Medical</option>
+              <option value="FREIGHT">Freight</option>
+            </select>
+          </label>
+          <label>From floor <input name="origin" type="number" min="1" max="40" value="2" required></label>
+          <label>To floor <input name="destination" type="number" min="1" max="40" value="30" required></label>
+          <label class="freight-only">Material <input name="material" placeholder="e.g. boxes"></label>
+          <label class="freight-only">Weight (kg) <input name="weight_kg" type="number" min="1" step="1"></label>
+          <button type="submit">Request mission</button>
+        </form>
+
+        <form id="recovery-form" class="block form">
+          <h3>Return a held car to service</h3>
+          <p class="hint">Supervisor only. The car still runs its own safety checks before it moves.</p>
+          <label>Car <select name="car_id" class="car-select"></select></label>
+          <button type="submit">Approve recovery</button>
+        </form>
+      </div>
+
+      <!-- UI-05 Simulation console -->
+      <div class="panel" data-panel="sim" role="tabpanel" hidden>
+        <div class="block controls">
+          <h3>Session</h3>
+          <button type="button" data-sim="start">Start</button>
+          <button type="button" data-sim="pause">Pause</button>
+          <label>Scenario <select id="scenario"></select></label>
+          <label>Seed <input id="seed" type="number" value="0" min="0"></label>
+          <button type="button" data-sim="reset">Reset</button>
+          <label>Speed
+            <select id="speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="5">5×</option>
+              <option value="10">10×</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="block">
+          <h3>Waiting times</h3>
+          <dl id="metrics" class="metrics"></dl>
+        </div>
+
+        <div class="block">
+          <h3>Hall calls and who owns them</h3>
+          <table class="list">
+            <thead><tr><th>Request</th><th>Floor</th><th>Going</th><th>Status</th><th>Owner</th><th>Since</th></tr></thead>
+            <tbody id="calls"></tbody>
+          </table>
+        </div>
+
+        <form id="fault-form" class="block form">
+          <h3>Inject or clear a fault</h3>
+          <label>Car <select name="car_id" class="car-select"></select></label>
+          <label>Fault
+            <select name="kind">
+              <option>MOTION_SERIOUS</option><option>DOOR_LOCK_LOSS</option><option>OBSTRUCTION</option>
+              <option>POSITION_SENSOR</option><option>LOAD_SENSOR</option><option>SENSOR_CONFLICT</option>
+              <option>HEARTBEAT_LOSS</option>
+            </select>
+          </label>
+          <button type="submit" name="op" value="inject">Inject fault</button>
+          <button type="submit" name="op" value="clear">Clear fault</button>
+        </form>
+
+        <div class="block form">
+          <h3>Building events</h3>
+          <button type="button" data-fire="true">Fire alarm on</button>
+          <button type="button" data-fire="false">Fire alarm off</button>
+          <label>Car <select id="maint-car" class="car-select"></select></label>
+          <button type="button" data-maint="true">Start maintenance</button>
+          <button type="button" data-maint="false">End maintenance</button>
+        </div>
+
+        <div class="block">
+          <h3>Event log</h3>
+          <ol id="events" class="events"></ol>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="hall" role="tabpanel" hidden>
+        <p class="later">The hall panel (UP/DOWN buttons on each floor) is built in the next step.</p>
+      </div>
+      <div class="panel" data-panel="cabin" role="tabpanel" hidden>
+        <p class="later">The cabin panel (destination, door and alarm buttons) is built in the next step.</p>
+      </div>
+      <div class="panel" data-panel="opt" role="tabpanel" hidden>
+        <p class="later">The optimization view is built in the next step. It can only show the active policy until the snapshot carries recommendations.</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
