@@ -210,11 +210,12 @@ class Engine:
         }
 
     def metrics(self) -> MetricsView:
-        """Waits per D-30, calls not yet served, commitment delay violations per D-63."""
+        """Waits per D-30, unserved and fault-reassigned calls (NFR-04), D-63 violations."""
         return {
             **self.observer.wait_stats(),  # type: ignore[typeddict-item]
             "unserved": self.observer.unserved,
             "delay_violations": self.observer.delay_violations,
+            "fault_reassigned": len(self.observer.fault_reassigned),
         }
 
     # --- log --------------------------------------------------------------------------

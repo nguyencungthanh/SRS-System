@@ -140,6 +140,7 @@ class MetricsView(TypedDict):
     max_wait: float | None
     unserved: int
     delay_violations: int
+    fault_reassigned: int  # hall calls moved to another car after their car was held (NFR-04)
 
 
 class OptimizationRunView(TypedDict):
@@ -378,6 +379,7 @@ def fake_snapshot(t_sim: float = 0.0) -> Snapshot:
             "max_wait": None,
             "unserved": 0,
             "delay_violations": 0,
+            "fault_reassigned": 0,
         },
         "last_events": [
             "00:00:00 HALL_CALL_ACCEPTED call=HC-0001 origin=27 dir=DOWN",

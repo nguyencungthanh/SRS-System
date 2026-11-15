@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How the code works</title>
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <strong>Smart Elevator</strong>
+      <span>how the code works</span>
+    </div>
+    <nav class="stories" id="stories" aria-label="Stories"></nav>
+    <a class="back" href="../" title="The live simulator UI">Live simulator</a>
+  </header>
+
+  <section class="caption" aria-live="polite">
+    <div class="caption-main">
+      <p class="tagline" id="tagline"></p>
+      <p class="moment" id="moment"></p>
+    </div>
+    <div class="caption-side">
+      <div class="reqs" id="reqs" aria-label="SRS requirements shown"></div>
+      <p class="note" id="note" hidden></p>
+    </div>
+  </section>
+
+  <main class="stage">
+    <section class="lanes-wrap" aria-label="The four modules">
+      <div class="bus" id="bus" aria-hidden="true"></div>
+      <div class="lanes" id="lanes"></div>
+    </section>
+    <section class="building-wrap" aria-label="Building">
+      <div class="building-head">
+        <span>t = <strong id="clock">0.0</strong> s</span>
+        <span class="legend">
+          <i class="lg pick"></i>pick up <i class="lg drop"></i>drop off
+          <i class="lg mis"></i>mission <i class="lg wait"></i>waiting
+        </span>
+      </div>
+      <svg id="building" role="img" aria-label="Floors 1 to 40 and the five shafts"></svg>
+      <div class="modes" id="modes"></div>
+    </section>
+  </main>
+
+  <footer class="controls">
+    <div class="buttons">
+      <button type="button" id="prev" title="Previous event (Left arrow)" aria-label="Previous event">&#9664;&#9664;</button>
+      <button type="button" id="play" class="play" title="Play / pause (Space)" aria-label="Play">&#9654;</button>
+      <button type="button" id="next" title="Next event (Right arrow)" aria-label="Next event">&#9654;&#9654;</button>
+      <label class="speed">speed
+        <select id="speed">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+      </label>
+    </div>
+    <div class="timeline">
+      <div class="ticks" id="ticks" aria-hidden="true"></div>
+      <input type="range" id="scrub" min="0" max="100" step="0.1" value="0" aria-label="Simulated time">
+      <div class="event-line" id="event-line"></div>
+    </div>
+    <div class="toggles">
+      <label><input type="checkbox" id="autopause" checked> pause at key moments</label>
+      <label><input type="checkbox" id="reports"> show state reports</label>
+      <span class="source" id="source"></span>
+    </div>
+  </footer>
+
+  <script src="stories.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

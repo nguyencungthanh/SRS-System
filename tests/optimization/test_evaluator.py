@@ -23,6 +23,7 @@ def metrics(**over) -> RunMetrics:
         algorithm="COMMITMENT",
         calls=10,
         unserved=1,
+        fault_reassigned=0,
         mean_wait=20.0,
         median_wait=18.0,
         p95_wait=60.0,

@@ -30,10 +30,11 @@ from contracts.config import (
     DWELL_S,
     SECONDS_PER_FLOOR,
 )
-from contracts.enums import DoorState, ServiceEventType, StopKind
+from contracts.enums import CabinMode, DoorState, ServiceEventType, StopKind
 
 TOLERANCE_S = 1e-6
 PROTECTED_KINDS = (StopKind.HALL_PICKUP.value, StopKind.CAR_DEST.value)
+HELD_MODES = (CabinMode.FAULT_HOLD.value, CabinMode.MAINTENANCE.value)
 REMAINING_DOOR_S = {
     DoorState.OPENING.value: DWELL_S,
     DoorState.OPEN.value: DOOR_OPEN_S + DOOR_CLOSING_S,
@@ -78,6 +79,17 @@ def route_etas(telemetry: Entry, stops: list[Entry]) -> dict[tuple[str, str | No
     return etas
 
 
+def _held(tel: Entry | None) -> bool:
+    """The car cannot serve: a fault, a held/maintenance mode or invalid sensors (SEN-02)."""
+    if tel is None:
+        return False
+    return (
+        bool(tel.get("faults"))
+        or tel.get("mode") in HELD_MODES
+        or not tel.get("sensors_valid", True)
+    )
+
+
 class RunObserver:
     def __init__(self) -> None:
         self.created: dict[str, float] = {}
@@ -92,6 +104,8 @@ class RunObserver:
         self.double_owner = 0
         self.door_breaches = 0
         self._pickups_by_car: dict[str, set[str]] = {}
+        self._owner: dict[str, str] = {}  # hall call -> car that last carried its pickup
+        self.fault_reassigned: set[str] = set()  # calls moved off a held car (NFR-04)
 
     # --- feeding ----------------------------------------------------------------------
 
@@ -141,6 +155,11 @@ class RunObserver:
             if s["kind"] == StopKind.HALL_PICKUP.value and s["ref_id"]
         }
         self._pickups_by_car[car] = pickups
+        for request in pickups:
+            before = self._owner.get(request)
+            if before is not None and before != car and _held(self._last_tel.get(before)):
+                self.fault_reassigned.add(request)
+            self._owner[request] = car
         for other, theirs in self._pickups_by_car.items():
             if other != car and pickups & theirs:
                 self.double_owner += 1
