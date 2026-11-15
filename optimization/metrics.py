@@ -18,6 +18,7 @@ class RunMetrics:
     algorithm: str
     calls: int
     unserved: int
+    fault_reassigned: int  # hall calls moved off a held car (NFR-04)
     mean_wait: float | None
     median_wait: float | None
     p95_wait: float | None
@@ -93,6 +94,7 @@ def measure(
         algorithm=algorithm,
         calls=obs.calls,
         unserved=obs.unserved,
+        fault_reassigned=len(obs.fault_reassigned),
         mean_wait=waits["mean_wait"],
         median_wait=waits["median_wait"],
         p95_wait=waits["p95_wait"],

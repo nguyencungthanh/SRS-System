@@ -53,6 +53,14 @@ python -m app                              # web UI on http://localhost:8000 (DE
 ```
 
 ```bash
+python -m app.demo                         # re-record the explainer from real runs -> web/demo/stories.js (3 s)
+```
+
+```bash
+python -m http.server 8765 -d web          # then open http://localhost:8765/demo/ (no API needed)
+```
+
+```bash
 python -m optimization --method compare --quick   # AT-06 on one short trace each, about 20 s
 ```
 
@@ -80,6 +88,24 @@ Scenarios: `AT-01`, `AT-02`, `AT-03`, `AT-04`, `AT-05-ack-lost`, `AT-05-unsafe`,
 | `cabin/`, `tests/cabin/` | Hai | Cabin controller |
 | `control_center/`, `api/`, `web/`, `tests/control_center/` | Huy | Control Center, REST/WebSocket API, UI |
 
+## Explainer demo: how the code works
+
+`web/demo/` (also at http://localhost:8000/demo/ when `python -m app` runs) replays six
+stories recorded from the real modules: a normal minute, AT-01, AT-02, AT-03, and two of
+Hai's system tests (SY-24 breakdown, SY-04 crowd with an overload). On the left, the four
+modules as color-coded lanes; for every message, what each one received or sent, the
+functions that ran (file and line) and what they decided: Dispatch's ETA per car and the
+DELAY_CAP check, the Cabin's eight checks in `validate()`, the door state machine, Control
+Center's permission check. On the right, the building at the same moment.
+
+Nothing on the page is drawn by hand: `python -m app.demo` runs each scenario with a
+profiler on the modules and writes `web/demo/stories.js`. `tests/engine/test_demo.py`
+checks the recorded decisions against the SRS oracles and that every code pointer still
+lands on its `def` line (re-record after changing module code).
+
+Keys: Space play/pause, Left/Right one message, 1-6 stories. "Pause at key moments" stops
+on each captioned step; "show state reports" adds the cars' telemetry messages.
+
 ## Status
 
 | Part | Status |
@@ -101,7 +127,9 @@ Acceptance tests on the **real** modules (`python -m app.headless --scenario <na
 | AT-05 | lost ACK / unsafe cabin: never two owners | PASS (both variants) |
 | AT-06 | every (R, W) valid or rejected; SATSA vs grid vs (3, 5) on held-out traces | PASS: all 55 pairs valid, comparison in [results/optimization.md](results/optimization.md) |
 
-`pytest` on the merged code: 617 passed, 1 skipped (the "no api/ yet" check). The full suite takes about 4 minutes because of the system stress tests.
+`pytest` on the merged code: 661 passed, 1 skipped (the "no api/ yet" check). The full suite takes about 2-4 minutes because of the system stress tests.
+
+Requirement traceability: each of the 89 requirement IDs of the SRS (SYS, REQ, DC, CB, MOVE, DOOR, SEN, MED, FRT, EMG, SAF, CC, SEC, OPT, SIM, UI, LOG, NFR) is named by at least one test function; the ones no module suite covered are in `tests/engine/test_requirements.py`.
 
 ## Tuning results (AT-06, held-out traces)
 

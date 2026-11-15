@@ -89,7 +89,7 @@ Only one long-lived branch exists: **`main`**. There is no `develop`.
 | Building modules | Normal PRs into `main` |
 | Integration | An integrates. Owners only merge **fixes** for failures An reports, and reply quickly. |
 | Stabilising | Bug fixes only, no new features |
-| Code freeze | An tags `v1.0-demo`. Anything not working goes into the README as known issues or deferred. |
+| Code freeze | Anything not working goes into the README as known issues or deferred. |
 
 ## 6. Working with your AI
 

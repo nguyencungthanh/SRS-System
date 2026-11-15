@@ -235,3 +235,39 @@ AT-01..AT-05 pass on the real modules.
 **Honest results:** grid search beat (3, 5) on held-out traces by about 4 %; SATSA (seed 0)
 did worse than (3, 5) and found the grid optimum with 12 of 20 seeds; Thanh's SWEEP baseline
 waited less than the commitment-aware dispatcher. All reported as measured.
+
+## 16/11/2026 - Finalize: every SRS ID tested, NFR-04 gap, explainer demo
+
+**Asked:** (1) drop the `v1.0-demo` tag rule from CONTRIBUTING; (2) a demo for first-time
+listeners, the left/right layout from the first mockup, more color, focused on explaining
+how the code works; (3) tests so every feature requirement is covered.
+
+**AI did**
+
+- Traceability: 9 requirement IDs had no test naming them and 2 were only mentioned.
+  `tests/engine/test_requirements.py` checks each one on the integrated system (SYS-01,
+  SYS-04, SEN-01, SIM-08, UI-03, UI-05, NFR-02, NFR-04, NFR-06, LOG-03, LOG-04). Now all 89
+  IDs appear in a test name (script-checked).
+- Writing the NFR-04 test exposed a real gap: "report fault-reassigned calls" was not
+  measured anywhere. Added the count (D-69) to the observer, metrics, console and RunMetrics.
+- Demo (D-70): `python -m app.demo` runs six stories on the real modules with a profiler on
+  the modules and records, per message, who sent it, the code that produced it, the code
+  that handled it, and what key functions returned (ETA per car, the DELAY_CAP check inside
+  `hall_route`, the eight checks of `validate()`, door transitions, role checks).
+  `web/demo/` replays it: four color-coded lanes, a message bus, the building, captions at
+  key moments, play / step / scrub. Checked in the browser (light and dark).
+
+**AI got wrong (and how it was caught)**
+
+- First recording showed every message as sent by "the scenario": the bus queues a module's
+  outputs after `handle()` returns, when the recorder had already cleared "current module".
+  Caught by printing the event list before building the page.
+- Hai's SY-04 crowd never reaches overload: the simulated passengers stop boarding before
+  1000 kg. Showing SEN-03 needed one scripted extra person (said so on screen, "scripted").
+- Two captions were attached to telemetry messages, which the page hides by default, so
+  the key moment never appeared. Captioned messages are now always shown.
+- Earlier I reported "89/89 implemented"; NFR-04's fault-reassigned count was missing.
+
+**Checks:** full `pytest`, `pytest --fakes`, ruff; `tests/engine/test_demo.py` compares the
+recording with the SRS oracles (AT-01 8 s, AT-02 +6 s of 10, AT-03 P2 = 20 s) and fails when
+a code pointer no longer lands on its `def` line.

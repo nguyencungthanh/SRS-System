@@ -343,6 +343,7 @@ function renderConsole(snap) {
     ["Longest wait", seconds(m.max_wait)],
     ["Not yet served", m.unserved],
     ["Delay violations", m.delay_violations],
+    ["Moved after a fault", m.fault_reassigned ?? 0],
   ];
   $("#metrics").innerHTML = tiles.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
 
