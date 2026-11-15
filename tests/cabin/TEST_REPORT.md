@@ -14,8 +14,9 @@
 - The Cabin Controller is implemented and merged. One class runs as five independent instances (P1-P4, G1).
 - **Integrated acceptance now runs on the real system.** Dispatch (Thanh) and Control Center (Huy) are merged, and AT-01 to AT-05 reproduce the SRS numbers with all three real modules (Section 3.4).
 - **New since the first report:** a real-world edge-case test set, requested by the supervisor. It has 38 scenarios and a random stress test that checks 13 safety rules after each of 123,973 messages. It is described in [EDGE_CASES.md](EDGE_CASES.md). **It found 6 real defects in the cabin, all fixed** (Section 5.2).
-- **Cabin tests:** contract tests 34 of 35 pass; the cabin's own tests 115 of 115 pass. The one failure is a defect in the test harness, not in the cabin (Section 5.1).
-- **Whole repository: 497 passed, 1 failed (the same test), 1 skipped.** Lint and formatting are clean.
+- **New since 15 November (second update):** a whole-system test set with all real modules: 42 real-world scenarios plus a 20-seed random stress test. It is described in [SYSTEM_EDGE_CASES.md](SYSTEM_EDGE_CASES.md). It found 3 more cabin defects (all fixed, Section 5.2) and one defect in Dispatch (F-1, documented, not fixed).
+- **Cabin tests:** contract tests 34 of 35 pass; the cabin's own tests all pass. The one failure is a defect in the test harness, not in the cabin (Section 5.1).
+- **Whole repository: 561 passed, 1 expected failure (F-1, Dispatch), 1 failed (the same harness test), 1 skipped.** Lint and formatting are clean.
 - Replaying a recorded run gives an identical log.
 
 ## 2. What was implemented
@@ -69,6 +70,8 @@ Static checks: `ruff check .` passes; `ruff format --check .` reports all 79 fil
 | `test_cabin_behaviour.py` | 9 | Behaviour the contract tests miss: releasing hall calls on fault or maintenance, OBSTRUCTED reported, door buttons ignored in a fault hold, sensor-fault stop and resume, medical leg, manual exit |
 | `test_cabin_edge_cases.py` | 38 | Real-world scenarios EC-01 to EC-10: full car, door held, trapped between floors, sensor glitches, changed destinations, shared floor, fire, failed missions, unreliable messages, ends of the shaft ([EDGE_CASES.md](EDGE_CASES.md)) |
 | `test_cabin_stress.py` | 31 | EC-11: 30 random seeds of 10 minutes each, 13 safety rules checked after every message, plus a no-deadlock check and a coverage guard |
+| `test_system_scenarios.py`, `test_system_missions_ops.py` | 42 | Whole system, all modules real: traffic peaks, crowds, breakdowns, maintenance, emergencies, bad requests, fire, network faults, operator permissions, pause ([SYSTEM_EDGE_CASES.md](SYSTEM_EDGE_CASES.md)) |
+| `test_system_stress.py` | 22 | SY-20: 20 random seeds of whole-system disruption (646,894 messages, 1,200 passengers), coverage guard, replay check |
 
 ### 3.4 Acceptance scenarios on the integrated system
 
@@ -112,8 +115,11 @@ A separate script queued the same obstruction before 14.0 s was processed. The c
 | 4 | Staff "loaded" started the mission even when the cabin read over 1000 kg | The cabin's load check must also pass; OVERLOAD alert while waiting |
 | 5 | A mission route with the pickup before a passenger's stop was accepted, which jams the car | Refused (`ONBOARD_COMMITMENT`) |
 | 6 | When Dispatch withdrew the only call, the car kept running to the old target | Stops at the next safely reachable floor |
+| C-1 | A call served at an already-open door was not announced as "doors opened", so waiting passengers never boarded (regression from fix 3) | Re-announce DOOR_OPENED |
+| C-2 | Handoff completed at the freight pickup itself: the cabin ignored the loading confirmation and waited forever | Counts as arrived at the pickup |
+| C-3 | A serious fault during a mission sent no status: freight "in progress" forever, medical "reserved" forever | FAILED before loading, HOLD_PENDING_REVIEW after loading, resumes after recovery |
 
-Details and the tests that found them: [EDGE_CASES.md](EDGE_CASES.md), Section 4.
+Details: fixes 1-6 in [EDGE_CASES.md](EDGE_CASES.md) Section 4; C-1 to C-3 in [SYSTEM_EDGE_CASES.md](SYSTEM_EDGE_CASES.md) Section 4.
 
 ### 5.3 Framework inconsistencies reported to An
 
@@ -142,8 +148,9 @@ The SRS and DECISIONS.md do not define the following. Each one is marked in the 
 
 ## 6. Next steps
 
-1. Merge `hai/HA-edge-cases` (edge-case set and the six fixes).
-2. An fixes the SIM_04 test; the team answers Q1, Q3 to Q9 and O-1 to O-4; the cabin is adjusted where needed.
+1. Merge `hai/HA-system-tests` (system test set and fixes C-1 to C-3).
+2. Thanh (with Huy) looks at F-1: a medical mission whose car breaks down is never re-dispatched.
+3. An fixes the SIM_04 test; the team answers Q1, Q3 to Q9 and O-1 to O-9; the cabin is adjusted where needed.
 3. When An's optimizer (AT-06) exists, check that the cabin still passes the stress invariants under its generated traffic.
 
 ## How to reproduce

@@ -264,7 +264,9 @@ def test_DOOR_04_D_04_obstruction_while_closing_reopens(cabin_impl):
 
 def test_SIM_04_obstruction_beats_door_close_at_the_same_instant(cabin_impl):
     obstruction = FaultInjected(t_sim=14.0, car_id="P1", kind=FaultKind.OBSTRUCTION)
-    bus, _ = at01(cabin_impl, until=30.0, extra=[(14.0, obstruction)])
+    # Queue it at 13.5 s (for delivery at 14.0 s), before the bus processes t=14: only then do
+    # the obstruction and the door-close completion really meet at the same instant.
+    bus, _ = at01(cabin_impl, until=30.0, extra=[(13.5, obstruction)])
     assert at(bus, "P1", E.DOOR_REOPENED, 27) == [14.0]
     assert at(bus, "P1", E.CAR_DEPARTED, 27) == [20.0]
 

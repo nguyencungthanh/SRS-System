@@ -151,3 +151,64 @@ def test_FRT_01_declared_payload_at_limit_is_valid_above_limit_is_excluded():
 
     assert exact.excluded is None
     assert above.excluded == ExclusionReason.OVER_PAYLOAD
+
+
+# --- D-62 (finalize, 15/11): a mission released by a held car is offered again ----------
+
+from app.modules import module_set  # noqa: E402
+from contracts.enums import FaultKind, MissionAction, MissionStatus  # noqa: E402
+from contracts.messages import (  # noqa: E402
+    CabinInit,
+    FaultInjected,
+    MissionLoadConfirmed,
+    MissionRequest,
+    MissionStatusUpdate,
+    RouteProposal,
+)
+from simulation.engine import Engine  # noqa: E402
+from simulation.scenario import Scenario  # noqa: E402
+
+_FLEET = tuple(
+    CabinInit(car_id=c, floor=f)
+    for c, f in (("P1", 40), ("P2", 10), ("P3", 25), ("P4", 35), ("G1", 1))
+)
+_MEDICAL = MissionRequest(
+    t_sim=0.0,
+    role=Role.MEDICAL_COORDINATOR,
+    mission_type=MissionType.MEDICAL,
+    origin=2,
+    destination=30,
+)
+
+
+def _run(*inputs, duration=60.0) -> Engine:
+    engine = Engine(
+        module_set("real", "real", "real")[0],
+        Scenario(name="D-62", fleet=_FLEET, inputs=(_MEDICAL, *inputs), duration_s=duration),
+    )
+    engine.run_to_end()
+    return engine
+
+
+def _mission_cars(engine: Engine) -> list[str]:
+    return [p.car_id for p in engine.bus.select(RouteProposal) if p.mission_id == "MS-0001"]
+
+
+def test_D_62_MED_04_mission_released_by_a_faulted_car_goes_to_another_car():
+    engine = _run(FaultInjected(t_sim=3.0, car_id="P2", kind=FaultKind.MOTION_SERIOUS))
+    assert _mission_cars(engine)[:2] == ["P2", "P3"]
+    reserved = [
+        (u.t_sim, u.car_id)
+        for u in engine.bus.select(MissionStatusUpdate)
+        if u.status == MissionStatus.RESERVED
+    ]
+    assert reserved == [(0.0, "P2"), (3.0, "P3")]
+
+
+def test_D_62_failed_loading_is_not_offered_again():
+    failed = MissionLoadConfirmed(
+        t_sim=18.0, mission_id="MS-0001", car_id="P2", action=MissionAction.LOAD_FAILED
+    )
+    engine = _run(failed)
+    assert _mission_cars(engine) == ["P2"]
+    assert engine.snapshot()["missions"][0]["status"] == "FAILED"

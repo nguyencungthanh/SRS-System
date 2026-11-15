@@ -168,3 +168,35 @@ code. An approved both without changes.
 **Result:** `pytest` 165 passed, 97 skipped; `pytest --fakes` 212 passed; `ruff` clean;
 `python -m app.headless --scenario AT-01` prints 8 / 58 / 64 s with all fakes; replay
 IDENTICAL. Not committed.
+
+---
+
+## 15/11/2026 - Finalize after the three modules were merged
+
+**Asked:** check the merged repository end to end, then fix everything (Huy and Hai gave An
+full authority).
+
+**AI did**
+
+- Cloned `main` into a scratch folder and ran everything on the real modules: 539 passed,
+  1 failed; AT-01..AT-05 matched the SRS numbers; replay IDENTICAL; the web server worked;
+  no folder or dependency rule was broken.
+- Traced the one red test to a bug in the AI's own contract test (SIM_04 injected the
+  obstruction after t=14 had already been processed) - Hai had found and reported the same.
+- Confirmed Hai's finding F-1 (a medical patient abandoned when the reserved car breaks
+  down) and traced it to a gap in the AI's own decision D-55 plus a Dispatch shortcut.
+  Added D-62; Dispatch now re-selects; Control Center keeps statuses in lifecycle order and
+  accepts a re-dispatch after FAILED (which also fixed DRAINING being hidden by RESERVED).
+- API now refuses impossible hall calls with the D-18 reason; DECISIONS all Agreed; README
+  shows real-module results. Hai's system-test branch merged with his authorship kept.
+
+**AI got wrong**
+
+- Its own SIM_04 test, as above (it was never `fake_ok`, so it had never run before).
+- First reported Hai's branch as "tests only": `git diff --stat | tail -8` had cut off the
+  `cabin/cabin.py` line. Re-checked before relying on it.
+- Committed once with two ruff findings still open (`... | tail` hid the exit code); fixed
+  in the next commit.
+
+**Result:** `pytest` 617 passed, 1 skipped; `pytest --fakes` 567 passed; `ruff` clean;
+AT-01..AT-05 pass on the real modules.

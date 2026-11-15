@@ -174,7 +174,7 @@ class Cabin:
             case FaultCleared():
                 self.faults.discard(msg.kind)
             case RecoveryApproved():
-                self._on_recovery()
+                self._on_recovery(now, out)
             case MaintenanceSet(on=True):
                 if self.hold is None:
                     self.hold = CabinMode.MAINTENANCE
@@ -332,11 +332,21 @@ class Cabin:
         kw.setdefault("floor", round(self._pos(now)))
         out.append(ServiceEvent(t_sim=now, car_id=self.car_id, event=event, **kw))
 
-    def _mission_status(self, now: float, out: list[Message], status: MissionStatus) -> None:
+    def _mission_status(
+        self,
+        now: float,
+        out: list[Message],
+        status: MissionStatus,
+        reason: NackReason | None = None,
+    ) -> None:
         assert self.mission_id is not None
         out.append(
             MissionStatusUpdate(
-                t_sim=now, mission_id=self.mission_id, status=status, car_id=self.car_id
+                t_sim=now,
+                mission_id=self.mission_id,
+                status=status,
+                car_id=self.car_id,
+                reason=reason,
             )
         )
 
@@ -473,7 +483,13 @@ class Cabin:
         if not changed:
             return
         self.version += 1
-        if self.door in (DoorState.OPEN, DoorState.CLOSING):  # restart OPEN / reopen
+        if self.door == DoorState.OPEN:
+            # Restart the OPEN period and announce the open door again: waiting passengers
+            # board on DOOR_OPENED after HALL_CALL_SERVED (D-56). Without this they would
+            # watch an open car leave without them (found by system test SY-01).
+            self._door(DoorInput.OPEN_BUTTON, now, out)
+            self._event(now, out, E.DOOR_OPENED, floor=floor)
+        elif self.door == DoorState.CLOSING:  # reopen; DOOR_OPENED follows after OPENING
             self._door(DoorInput.OPEN_BUTTON, now, out)
 
     # ==================================================================================
@@ -692,17 +708,36 @@ class Cabin:
             self.hold = CabinMode.FAULT_HOLD
             self._drop_hall_pickups()
             self._alert(now, out, AlertKind.FAULT, details=msg.kind.value)
+            self._mission_hit_by_fault(now, out)
         elif msg.kind in STOPPING_FAULTS:  # Q3
             self._stop_motion(now)
             self._alert(now, out, AlertKind.SENSOR, details=msg.kind.value)
 
-    def _on_recovery(self) -> None:
+    def _on_recovery(self, now: float, out: list[Message]) -> None:
         """EMG-04: the approval alone is not enough; the cabin's readiness checks must pass."""
         if self.hold == CabinMode.FAULT_HOLD:
             if FaultKind.MOTION_SERIOUS not in self.faults and not (self.faults & STOPPING_FAULTS):
                 self.hold = None
+                if self.phase in (MissionPhase.EXCLUSIVE, MissionPhase.AT_DROPOFF):
+                    self._mission_status(now, out, MissionStatus.IN_PROGRESS)  # resumes
         elif self.hold == CabinMode.MAINTENANCE:
             self.hold = None  # Q1: MaintenanceSet(on=False) not required yet
+
+    def _mission_hit_by_fault(self, now: float, out: list[Message]) -> None:
+        """FRT-04, EMG-05: a serious fault never leaves a mission silently 'in progress'.
+
+        Nothing loaded yet: the mission FAILS here and is released, so it can be handled
+        again elsewhere. Load or patient already on board: HOLD_PENDING_REVIEW; the car
+        keeps the mission and resumes it after authorised recovery.
+        (Found by system tests SY-24 / SY-25.)
+        """
+        if self.phase == MissionPhase.NONE:
+            return
+        if self.phase in (MissionPhase.EXCLUSIVE, MissionPhase.AT_DROPOFF):
+            self._mission_status(now, out, MissionStatus.HOLD_PENDING_REVIEW, NackReason.FAULT_HOLD)
+            return
+        self._mission_status(now, out, MissionStatus.FAILED, NackReason.FAULT_HOLD)
+        self._end_mission()
 
     # ==================================================================================
     # Missions (HA-07)
@@ -728,6 +763,17 @@ class Cabin:
         self._event(now, out, E.DRAIN_COMPLETE, ref_id=self.mission_id)
         self._event(now, out, E.HANDOFF_OK, ref_id=self.mission_id)
         self.phase = MissionPhase.TO_PICKUP
+        nxt = self.route[0] if self.route else None
+        if (
+            nxt is not None
+            and nxt.kind == StopKind.MISSION_PICKUP
+            and nxt.floor == self._floor()
+            and self.door in (DoorState.OPENING, DoorState.OPEN)
+        ):
+            # The last passenger got off at the mission pickup itself: the car is already
+            # standing open there, so loading can start now (found by system stress seed 4;
+            # before, the car closed, reopened and ignored the staff's confirmation).
+            self.phase = MissionPhase.AT_PICKUP
 
     def _on_mission_confirm(
         self, msg: MissionLoadConfirmed, now: float, out: list[Message]

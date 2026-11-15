@@ -180,9 +180,27 @@ class Dispatch:
         # actually removes the pickups; a held car can still list retained work.
         self._release_dropped_pickups(msg)
         if old is not None and old.mission_id is not None and msg.mission_id is None:
-            mission = self._missions.get(old.mission_id)
-            if mission is not None and mission.status == MissionStatus.RESERVED:
-                mission.status = MissionStatus.COMPLETED
+            self._mission_released(old.mission_id, msg)
+
+    def _mission_released(self, mission_id: str, telemetry: CabinTelemetry) -> None:
+        """D-62: the owner stopped listing its mission. Delivered -> COMPLETED. Dropped by a
+        car that is now held (fault or maintenance) before pickup -> choose another car
+        (MED-04, EMG-05: an emergency is never dropped silently). Otherwise the mission
+        ended without delivery (e.g. LOAD_FAILED) -> FAILED."""
+        mission = self._missions.get(mission_id)
+        if (
+            mission is None
+            or mission.status != MissionStatus.RESERVED
+            or mission.owner != telemetry.car_id
+        ):
+            return
+        if mission.delivered:
+            mission.status = MissionStatus.COMPLETED
+        elif telemetry.mode in (CabinMode.FAULT_HOLD, CabinMode.MAINTENANCE):
+            mission.status = MissionStatus.APPROVED
+            mission.owner = None
+        else:
+            mission.status = MissionStatus.FAILED
 
     def _release_dropped_pickups(self, telemetry: CabinTelemetry) -> None:
         if telemetry.mode not in (CabinMode.FAULT_HOLD, CabinMode.MAINTENANCE):
@@ -212,6 +230,10 @@ class Dispatch:
                 self._await_stop_removal(msg, StopKind.HALL_PICKUP, call.request_id)
         elif msg.event == ServiceEventType.DEST_SERVED:
             self._await_stop_removal(msg, StopKind.CAR_DEST, msg.passenger_id or msg.ref_id)
+        elif msg.event == ServiceEventType.MISSION_DELIVERY_DONE:
+            mission = self._missions.get(msg.ref_id or "")
+            if mission is not None and mission.owner == msg.car_id:
+                mission.delivered = True
         elif msg.event in (ServiceEventType.DOOR_OPENING, ServiceEventType.DOOR_REOPENED):
             self._ready_at[msg.car_id] = now + DWELL_S
         elif msg.event == ServiceEventType.DOOR_OPENED:

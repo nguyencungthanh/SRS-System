@@ -366,3 +366,20 @@ def test_5_3_simulation_refusals_are_recorded_too():
     client.post("/hall-call", json={"floor": 3, "direction": "UP", "role": "PASSENGER"})
     (entry,) = client.get("/audit").json()
     assert (entry["status"], entry["reason"], entry["role"]) == (409, "INVALID_STATE", "PASSENGER")
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ({"floor": 99, "direction": "UP"}, "FLOOR_OUT_OF_RANGE"),
+        ({"floor": 0, "direction": "UP"}, "FLOOR_OUT_OF_RANGE"),
+        ({"floor": 1, "direction": "DOWN"}, "TERMINAL_DIRECTION"),
+        ({"floor": 40, "direction": "UP"}, "TERMINAL_DIRECTION"),
+        ({"floor": 10, "direction": "IDLE"}, "INVALID_DIRECTION"),
+    ],
+)
+def test_UI_02_D_18_impossible_hall_call_is_refused_at_once(client, control, body, reason):
+    response = client.post("/hall-call", json=body)
+    assert response.status_code == 409
+    assert response.json() == {"ok": False, "id": None, "reason": reason}
+    assert control.submitted == []
