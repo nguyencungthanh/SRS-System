@@ -53,11 +53,33 @@ from control_center.permissions import (
 # Modes from which a supervisor may authorise the return to AUTO (EMG-04).
 RECOVERABLE_MODES: frozenset[CabinMode] = frozenset({CabinMode.FAULT_HOLD, CabinMode.MAINTENANCE})
 
-# Mission statuses after which no update is accepted, and statuses that mean "no car".
+# Finished missions (kept within MAX_FINISHED_MISSIONS), and statuses that mean "no car".
 TERMINAL_STATUSES: frozenset[str] = frozenset(
     {MissionStatus.REJECTED, MissionStatus.COMPLETED, MissionStatus.FAILED}
 )
+# Statuses after which no update is accepted at all.
+FINAL_STATUSES: frozenset[str] = frozenset({MissionStatus.REJECTED, MissionStatus.COMPLETED})
 CARLESS_STATUSES: frozenset[MissionStatus] = frozenset({MissionStatus.UNAVAILABLE})
+# D-62: after a car fails a mission before pickup, Dispatch re-selects: RESERVED on another
+# car, or UNAVAILABLE. Only these may follow FAILED, and only for a different car.
+REDISPATCH_STATUSES: frozenset[MissionStatus] = frozenset(
+    {MissionStatus.RESERVED, MissionStatus.UNAVAILABLE}
+)
+
+# D-29: for the same car a mission only moves forward. A cabin's DRAINING may arrive before
+# Dispatch's RESERVED for that same car; the late RESERVED must not hide DRAINING.
+LIFECYCLE_RANK: dict[str, int] = {
+    MissionStatus.REQUESTED: 0,
+    MissionStatus.APPROVED: 1,
+    MissionStatus.UNAVAILABLE: 2,
+    MissionStatus.RESERVED: 3,
+    MissionStatus.DRAINING: 4,
+    MissionStatus.IN_PROGRESS: 5,
+    MissionStatus.HOLD_PENDING_REVIEW: 5,  # may return to IN_PROGRESS after recovery
+    MissionStatus.FAILED: 6,
+    MissionStatus.COMPLETED: 6,
+    MissionStatus.REJECTED: 6,
+}
 
 # F13: the snapshot must not grow without limit. Unfinished missions and unacknowledged
 # alerts are always kept (UI-04, EMG-05); only the oldest finished / acknowledged go.
@@ -180,8 +202,15 @@ class ControlCenter:
         view = self._missions.get(msg.mission_id)
         if view is None:
             return  # not a mission this Control Center approved
-        if view["status"] in TERMINAL_STATUSES:
-            return  # finished missions never change again (F11)
+        if view["status"] in FINAL_STATUSES:
+            return  # completed or rejected missions never change again (F11)
+        same_attempt = msg.car_id == view["car_id"]
+        if view["status"] == MissionStatus.FAILED and (
+            same_attempt or msg.status not in REDISPATCH_STATUSES
+        ):
+            return  # failed stays failed unless Dispatch starts a new attempt (D-62)
+        if same_attempt and LIFECYCLE_RANK[msg.status] < LIFECYCLE_RANK[view["status"]]:
+            return  # D-29: a late, older status for the same car
         was_unavailable = view["status"] == MissionStatus.UNAVAILABLE
         view["status"] = msg.status.value
         # Each update describes the mission as it is now, so nothing from an older update

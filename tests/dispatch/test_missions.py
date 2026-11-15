@@ -156,7 +156,7 @@ def test_FRT_01_declared_payload_at_limit_is_valid_above_limit_is_excluded():
 # --- D-62 (finalize, 15/11): a mission released by a held car is offered again ----------
 
 from app.modules import module_set  # noqa: E402
-from contracts.enums import FaultKind, MissionAction, MissionStatus, MissionType, Role  # noqa: E402
+from contracts.enums import FaultKind, MissionAction, MissionStatus  # noqa: E402
 from contracts.messages import (  # noqa: E402
     CabinInit,
     FaultInjected,

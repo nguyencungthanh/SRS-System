@@ -422,3 +422,39 @@ def test_EMG_05_unacknowledged_alerts_are_never_dropped(cc):
         f"MSG-{i}" for i in range(10)
     ]
     assert sum(a["acknowledged"] for a in alerts) == MAX_ACKED_ALERTS
+
+
+# --- D-29 / D-62 (finalize, 15/11): status order and re-dispatch after a failure ---------
+
+
+def test_D_29_late_reserved_does_not_hide_draining(cc):
+    mid = approved_mission(cc)
+    cc.handle(update(mid, MissionStatus.DRAINING, car_id="P1"), 0.0)
+    cc.handle(update(mid, MissionStatus.RESERVED, car_id="P1"), 0.0)  # Dispatch's, after the ACK
+    assert cc.snapshot()["missions"][0]["status"] == "DRAINING"
+
+
+def test_D_29_hold_can_resume_in_progress(cc):
+    mid = approved_mission(cc)
+    cc.handle(update(mid, MissionStatus.IN_PROGRESS, car_id="P1"), 1.0)
+    cc.handle(update(mid, MissionStatus.HOLD_PENDING_REVIEW, car_id="P1"), 2.0)
+    cc.handle(update(mid, MissionStatus.IN_PROGRESS, car_id="P1"), 3.0)
+    assert cc.snapshot()["missions"][0]["status"] == "IN_PROGRESS"
+
+
+@pytest.mark.parametrize("next_status", [MissionStatus.RESERVED, MissionStatus.UNAVAILABLE])
+def test_D_62_failed_car_then_dispatch_starts_a_new_attempt(cc, next_status):
+    mid = approved_mission(cc)
+    cc.handle(update(mid, MissionStatus.RESERVED, car_id="P2"), 0.0)
+    cc.handle(update(mid, MissionStatus.FAILED, car_id="P2"), 3.0)
+    new_car = "P3" if next_status == MissionStatus.RESERVED else None
+    cc.handle(update(mid, next_status, car_id=new_car), 3.0)
+    view = cc.snapshot()["missions"][0]
+    assert (view["status"], view["car_id"]) == (next_status.value, new_car)
+
+
+def test_D_62_failed_stays_failed_for_the_same_car(cc):
+    mid = approved_mission(cc)
+    cc.handle(update(mid, MissionStatus.FAILED, car_id="P2"), 3.0)
+    cc.handle(update(mid, MissionStatus.RESERVED, car_id="P2"), 4.0)
+    assert cc.snapshot()["missions"][0]["status"] == "FAILED"
