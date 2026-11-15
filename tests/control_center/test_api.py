@@ -184,10 +184,18 @@ def test_HY_05_speed_addition_checks_the_factor(client, control):
     assert control.controls == [(SimCommand.SPEED, {"factor": 4.0})]
 
 
-def test_OPT_06_optimization_run_is_501_until_an_adds_it(client):
+def test_OPT_06_D_68_optimization_run_reaches_the_simulation(client, control):
     assert client.post("/optimization/run", json={"role": "PASSENGER"}).status_code == 403
     response = client.post("/optimization/run", json={"role": "OPERATOR", "method": "GRID"})
-    assert response.status_code == 501 and response.json()["ok"] is False
+    assert response.status_code == 200 and response.json()["ok"] is True
+    body = {"role": "OPERATOR", "method": "SATSA", "quick": False}
+    assert client.post("/optimization/run", json=body).status_code == 200
+    assert control.controls == [
+        (SimCommand.OPTIMIZE, {"method": "GRID", "quick": True}),
+        (SimCommand.OPTIMIZE, {"method": "SATSA", "quick": False}),
+    ]
+    bad = {"role": "OPERATOR", "method": "GRID", "quick": "yes"}
+    assert client.post("/optimization/run", json=bad).status_code == 422
 
 
 # --- reading state -----------------------------------------------------------------------

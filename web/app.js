@@ -96,8 +96,6 @@ async function send(path, body = {}, doneText = "Sent", asRole = null) {
   if (result.ok) {
     lastSendAt = Date.now();
     toast(doneText, true);
-  } else if (response.status === 501) {
-    toast("Not available yet: the simulation cannot start an optimization run.", false);
   } else {
     toast(REASON_TEXT[result.reason] || result.detail || `Refused (${response.status}).`, false);
   }
@@ -482,6 +480,29 @@ function renderPolicy(snap) {
   $("#policy").innerHTML = tiles.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
 }
 
+// OPT-06, D-68: runs started from the UI, their recommendation and the supervisor's decision.
+function renderOptimization(snap) {
+  const runs = (snap.optimization && snap.optimization.runs) || [];
+  if (!runs.length) {
+    $("#opt-runs").innerHTML = `<tr><td colspan="9" class="hint">No run yet.</td></tr>`;
+    return;
+  }
+  const num = (v) => (v === null || v === undefined ? "-" : Number(v).toFixed(1));
+  $("#opt-runs").innerHTML = runs.slice().reverse().map((r) => {
+    const status = r.status === "RUNNING" ? `running ${Math.round(r.progress * 100)}%` : r.status.toLowerCase();
+    const best = r.best ? `(${r.best.R}, ${r.best.W}) as ${esc(r.best.version)}` : "-";
+    const canDecide = r.status === "DONE" && r.decision === "PENDING";
+    const buttons = canDecide
+      ? `<button type="button" data-run-decide="${esc(r.run_id)}" data-approve="1">Approve</button>
+         <button type="button" data-run-decide="${esc(r.run_id)}" data-approve="0">Reject</button>`
+      : "";
+    const detail = r.detail ? ` title="${esc(r.detail)}"` : "";
+    return `<tr${detail}><td>${esc(r.run_id)}</td><td>${esc(r.method)}${r.quick ? " (quick)" : ""}</td>
+      <td>${esc(status)}</td><td>${r.evaluated}</td><td>${best}</td><td>${num(r.objective)}</td>
+      <td>${num(r.baseline_objective)}</td><td>${esc(r.decision.toLowerCase())}</td><td>${buttons}</td></tr>`;
+  }).join("");
+}
+
 // --- render everything --------------------------------------------------------------
 
 function render(snap) {
@@ -505,6 +526,7 @@ function render(snap) {
   renderHall(snap);
   renderCabin(snap);
   renderPolicy(snap);
+  renderOptimization(snap);
 }
 
 // --- wiring ---------------------------------------------------------------------------
@@ -615,7 +637,12 @@ function wireForms() {
         t.dataset.door === "true" ? "Door open pressed." : "Door close pressed.", "PASSENGER");
     }
     if (t.hasAttribute("data-alarm")) send("/alarm", { car_id: cabinCar }, `Alarm pressed in ${cabinCar}.`, "PASSENGER");
-    if (t.hasAttribute("data-optimize")) send("/optimization/run", { method: $("#opt-method").value }, "Optimization started.");
+    if (t.hasAttribute("data-optimize")) send("/optimization/run", { method: $("#opt-method").value, quick: true }, "Optimization started.");
+    if (t.dataset.runDecide) {
+      const approve = t.dataset.approve === "1";
+      send("/policy/approve", { run_id: t.dataset.runDecide, approve },
+        approve ? `Approval sent for ${t.dataset.runDecide}.` : `Rejection sent for ${t.dataset.runDecide}.`);
+    }
     if (t.dataset.ack) send("/alert/ack", { alert_id: t.dataset.ack }, "Acknowledgement sent.");
     if (t.dataset.confirm) {
       const body = { mission_id: t.dataset.mission, car_id: t.dataset.car, action: t.dataset.confirm };

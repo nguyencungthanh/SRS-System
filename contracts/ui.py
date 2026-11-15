@@ -142,6 +142,26 @@ class MetricsView(TypedDict):
     delay_violations: int
 
 
+class OptimizationRunView(TypedDict):
+    """One offline tuning run (OPT-06, D-68). Filled by app/runner.py."""
+
+    run_id: str
+    method: str  # GRID | SATSA
+    quick: bool
+    status: str  # RUNNING | DONE | FAILED
+    progress: float  # 0.0 .. 1.0
+    evaluated: int  # unique (R, W) pairs simulated so far
+    best: PolicyView | None  # the recommended policy, once DONE
+    objective: float | None  # J(best) on the training traces
+    baseline_objective: float | None  # J(3, 5) on the same traces
+    decision: str  # PENDING | APPROVED | REJECTED (Control Center)
+    detail: str | None
+
+
+class OptimizationView(TypedDict):
+    runs: list[OptimizationRunView]
+
+
 class Snapshot(TypedDict):
     t_sim: float
     sim_state: str  # SimState
@@ -155,6 +175,7 @@ class Snapshot(TypedDict):
     alerts: list[AlertView]
     metrics: MetricsView
     last_events: list[str]  # latest ~50 log lines, oldest first
+    optimization: OptimizationView  # D-68; {"runs": []} when no run was started
 
 
 # Per-module snapshot() return shapes (contracts.interfaces).
@@ -221,7 +242,9 @@ COMMANDS: tuple[Command, ...] = (
     Command("/sim/pause", None, _OPERATOR),
     Command("/sim/reset", None, _OPERATOR, "body: {scenario, seed}"),
     Command("/sim/replay", None, _OPERATOR, "body: {trace, seed}"),
-    Command("/optimization/run", None, _OPERATOR, "body: {method: GRID | SATSA}"),
+    Command(
+        "/optimization/run", None, _OPERATOR, "body: {method: GRID | SATSA, quick: bool = true}"
+    ),
 )
 
 SNAPSHOT_GET = "/snapshot"  # GET: current Snapshot once
@@ -361,4 +384,21 @@ def fake_snapshot(t_sim: float = 0.0) -> Snapshot:
             "00:00:00 ROUTE_PROPOSED car=P1 cmd=RC-0001 expected_version=7",
             "00:00:00 ROUTE_ACK car=P1 cmd=RC-0001 committed_version=8",
         ],
+        "optimization": {
+            "runs": [
+                {
+                    "run_id": "RUN-0001",
+                    "method": "SATSA",
+                    "quick": True,
+                    "status": "DONE",
+                    "progress": 1.0,
+                    "evaluated": 12,
+                    "best": {"version": "POL-0001", "R": 2, "W": 3},
+                    "objective": 41.5,
+                    "baseline_objective": 47.25,
+                    "decision": "PENDING",
+                    "detail": None,
+                }
+            ]
+        },
     }

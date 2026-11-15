@@ -200,3 +200,38 @@ full authority).
 
 **Result:** `pytest` 617 passed, 1 skipped; `pytest --fakes` 567 passed; `ruff` clean;
 AT-01..AT-05 pass on the real modules.
+
+---
+
+## 15/11/2026 - AN-03..AN-07: metrics, traffic, evaluator, grid search, SATSA, UI flow
+
+**Asked:** key features, then a plan (both approved without changes), then code.
+
+**AI did**
+
+- Measured before designing: one 30-minute random trace takes 5-13 s with the real modules,
+  and (R, W) changed nothing at one passenger per 20 s but did at one per 10 s. That set the
+  load (D-64) and the quick UI mode (D-65).
+- `simulation/metrics.py` (waits, D-63 commitment delay, D-66 invariants, used live by the
+  engine), `scenarios/traffic.py` + TRAIN/HOLDOUT/QUICK/RANDOM, `optimization/` (metrics,
+  parallel cached evaluator, grid, SATSA, report, CLI), `SimCommand.OPTIMIZE`,
+  `Snapshot["optimization"]`, runner background runs, `/optimization/run`, UI runs table with
+  approve / reject. Ran the full AT-06 study and committed `results/`.
+
+**AI got wrong (and how it was caught)**
+
+- The first D-63 measure counted 23-35 "violations" per trace. Classifying them showed they
+  were not Dispatch decisions: passengers' own destinations delay committed stops, and the
+  ETA model counted two dwells for two stops on one floor, and a re-opening door twice. The
+  measure now judges only ACKed Dispatch routes; observed lateness is reported separately.
+  Result: 0 violations in 30 checking runs (10 seeds x 3 policies). Without this, every
+  configuration - including (3, 5) - would have been rejected.
+- SATSA first spent its whole budget in 2-3 iterations. Tuned on synthetic surfaces against
+  random sampling (documented in satsa.py), not on the real data.
+- In a tie the grid picked (1, 0) only because R was smaller - a change without evidence.
+  Ties now keep (3, 5).
+- One of its own runner tests forgot the engine is paused after reset.
+
+**Honest results:** grid search beat (3, 5) on held-out traces by about 4 %; SATSA (seed 0)
+did worse than (3, 5) and found the grid optimum with 12 of 20 seeds; Thanh's SWEEP baseline
+waited less than the commitment-aware dispatcher. All reported as measured.

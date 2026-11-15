@@ -25,6 +25,8 @@ class SimCommand(StrEnum):
     RESET = "RESET"  # args: scenario: str, seed: int
     REPLAY = "REPLAY"  # args: trace: str (path of a trace file); answers IDENTICAL / DIFFERENT
     SPEED = "SPEED"  # args: factor: float (simulated seconds per wall second, 0.1..50)
+    OPTIMIZE = "OPTIMIZE"  # args: method: "GRID" | "SATSA", quick: bool = True (D-65, D-68);
+    # answers the run_id at once; progress and result appear in Snapshot["optimization"]
 
 
 SnapshotCallback = Callable[[Snapshot], Awaitable[None]]
