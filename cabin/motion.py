@@ -4,7 +4,9 @@ Position is never stepped tick by tick. While moving the cabin remembers where a
 started (``pos0``, ``t0``) and derives p(t) = pos0 +/- (t - t0) / SECONDS_PER_FLOOR.
 """
 
-from contracts.config import INSERT_CUTOFF_FLOORS, SECONDS_PER_FLOOR
+import math
+
+from contracts.config import INSERT_CUTOFF_FLOORS, MAX_FLOOR, MIN_FLOOR, SECONDS_PER_FLOOR
 from contracts.enums import Direction, NackReason
 from contracts.messages import Stop
 
@@ -56,6 +58,13 @@ def check_first_stop(
     if is_new and ahead < INSERT_CUTOFF_FLOORS - EPS:
         return NackReason.INSERT_CUTOFF
     return None
+
+
+def next_stoppable_floor(pos: float, direction: Direction) -> int:
+    """The nearest floor ahead that is at least INSERT_CUTOFF_FLOORS away (MOVE-06)."""
+    if sign(direction) > 0:
+        return min(MAX_FLOOR, math.ceil(pos + INSERT_CUTOFF_FLOORS - EPS))
+    return max(MIN_FLOOR, math.floor(pos - INSERT_CUTOFF_FLOORS + EPS))
 
 
 def insert_in_sweep(route: list[Stop], pos: float, stop: Stop) -> list[Stop]:

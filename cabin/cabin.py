@@ -27,7 +27,14 @@ from cabin.mission import (
     load_conflicts,
 )
 from cabin.proposal import SENSOR_FAULTS, CommandCache, RouteState, StoredReply, validate
-from contracts.config import FULL_LOAD_KG, MAX_FLOOR, MAX_LOAD_KG, MIN_FLOOR, TELEMETRY_HEARTBEAT_S
+from contracts.config import (
+    FULL_LOAD_KG,
+    INSERT_CUTOFF_FLOORS,
+    MAX_FLOOR,
+    MAX_LOAD_KG,
+    MIN_FLOOR,
+    TELEMETRY_HEARTBEAT_S,
+)
 from contracts.enums import (
     AlertKind,
     CabinMode,
@@ -80,6 +87,8 @@ KEY_DOOR = "door"
 # Faults that stop the car where it is until cleared (open question Q3: only
 # MOTION_SERIOUS needs supervisor recovery; the others resume once FaultCleared).
 STOPPING_FAULTS = SENSOR_FAULTS | {FaultKind.DOOR_LOCK_LOSS}
+
+ORDINARY_STOPS = (StopKind.HALL_PICKUP, StopKind.CAR_DEST)
 
 
 class Cabin:
@@ -340,6 +349,7 @@ class Cabin:
 
     def _progress(self, now: float, out: list[Message]) -> None:
         self._check_handoff(now, out)
+        self._serve_while_open(now, out)
         self._try_depart(now, out)
         if not self.route and not self.moving and self.door == DoorState.CLOSED:
             if not self.idle:
@@ -382,12 +392,22 @@ class Cabin:
         out.append(self._timer(now, motion.travel_time(pos, floor), KEY_ARRIVE, self.motion_epoch))
 
     def _retarget(self, now: float, out: list[Message]) -> None:
-        """After a route change while moving: aim at the new first stop if it lies ahead."""
-        if not self.moving or not self.route or self.route[0].floor == self.target:
+        """After a route change while moving (MOVE-06).
+
+        Aim at the new first stop only if the car can still stop there. If the current
+        target is gone and nothing ahead is reachable (e.g. Dispatch withdrew the only
+        call), stop at the next floor the car can safely reach instead of running on.
+        """
+        if not self.moving or (self.route and self.route[0].floor == self.target):
             return
-        ahead = (self.route[0].floor - self._pos(now)) * motion.sign(self.direction)
-        if ahead >= -motion.EPS:
+        pos = self._pos(now)
+        sign = motion.sign(self.direction)
+        if self.route and (self.route[0].floor - pos) * sign >= INSERT_CUTOFF_FLOORS - motion.EPS:
             self._set_target(self.route[0].floor, now, out)
+            return
+        nearest = motion.next_stoppable_floor(pos, self.direction)
+        if self.target is None or (self.target - nearest) * sign > motion.EPS:
+            self._set_target(nearest, now, out)
 
     def _stop_motion(self, now: float) -> None:
         """Stop exactly where the cabin is (EMG-02, SAF-03); pending arrival is invalidated."""
@@ -410,12 +430,8 @@ class Cabin:
         changed = open_doors = False
         while self.route and self.route[0].floor == floor:
             stop = self.route[0]
-            if stop.kind == StopKind.HALL_PICKUP:
-                self._event(now, out, E.HALL_CALL_SERVED, floor=floor, ref_id=stop.ref_id)
-            elif stop.kind == StopKind.CAR_DEST:
-                self._event(now, out, E.DEST_SERVED, floor=floor, passenger_id=stop.ref_id)
-                if stop.ref_id is not None:
-                    self.dests[stop.ref_id] = (floor, DestStatus.SERVED)
+            if stop.kind in ORDINARY_STOPS:
+                self._serve_ordinary(stop, floor, now, out)
             elif stop.kind == StopKind.MISSION_PICKUP:
                 if self.phase == MissionPhase.TO_PICKUP:
                     self.phase = MissionPhase.AT_PICKUP
@@ -433,6 +449,32 @@ class Cabin:
             self.version += 1
         if changed or open_doors:
             self._door(DoorInput.OPEN_CMD, now, out)
+
+    def _serve_ordinary(self, stop: Stop, floor: int, now: float, out: list[Message]) -> None:
+        if stop.kind == StopKind.HALL_PICKUP:
+            self._event(now, out, E.HALL_CALL_SERVED, floor=floor, ref_id=stop.ref_id)
+        else:
+            self._event(now, out, E.DEST_SERVED, floor=floor, passenger_id=stop.ref_id)
+            if stop.ref_id is not None:
+                self.dests[stop.ref_id] = (floor, DestStatus.SERVED)
+
+    def _serve_while_open(self, now: float, out: list[Message]) -> None:
+        """A call or destination for the floor where the doors are already open is served on
+        the spot, and the doors stay open for it (DOOR-03) instead of a second door cycle."""
+        if self.moving or self.hold == CabinMode.FAULT_HOLD or not self._at_landing():
+            return
+        if self.door not in (DoorState.OPENING, DoorState.OPEN, DoorState.CLOSING):
+            return
+        floor = self._floor()
+        changed = False
+        while self.route and self.route[0].floor == floor and self.route[0].kind in ORDINARY_STOPS:
+            self._serve_ordinary(self.route.pop(0), floor, now, out)
+            changed = True
+        if not changed:
+            return
+        self.version += 1
+        if self.door in (DoorState.OPEN, DoorState.CLOSING):  # restart OPEN / reopen
+            self._door(DoorInput.OPEN_BUTTON, now, out)
 
     # ==================================================================================
     # Doors (HA-03)
@@ -567,15 +609,20 @@ class Cabin:
     # Passengers, destinations and load (HA-05)
     # ==================================================================================
 
+    def _doorway_open(self) -> bool:
+        """People can only get on or off at a landing with the doors fully open: never
+        through closed doors, never between floors (EMG-02, 5.5)."""
+        return self._at_landing() and self.door == DoorState.OPEN
+
     def _on_board(self, msg: PassengerBoard, now: float, out: list[Message]) -> None:
-        if self.moving or msg.passenger_id in self.onboard:
+        if not self._doorway_open() or msg.passenger_id in self.onboard:
             return
         self.onboard[msg.passenger_id] = msg.weight_kg
         self._event(now, out, E.PASSENGER_BOARDED, passenger_id=msg.passenger_id)
 
     def _on_exit(self, msg: PassengerExit, now: float, out: list[Message]) -> None:
-        if self.moving or msg.passenger_id not in self.onboard:
-            return  # never remove anyone from a moving cabin (5.5)
+        if not self._doorway_open() or msg.passenger_id not in self.onboard:
+            return  # nobody leaves a moving, closed or between-floor cabin
         del self.onboard[msg.passenger_id]
         self._event(now, out, E.PASSENGER_EXITED, passenger_id=msg.passenger_id)
         # Manual exit before the destination (SEN-04): that trip is over.
@@ -605,7 +652,12 @@ class Cabin:
             s for s in self.route if not (s.kind == StopKind.CAR_DEST and s.ref_id == pid)
         ]
         stop = Stop(floor=floor, kind=StopKind.CAR_DEST, ref_id=pid)
-        self.route = motion.insert_in_sweep(self.route, self._pos(now), stop)
+        # MOVE-06: a moving car cannot stop sooner than the cutoff, so a floor pressed too
+        # late is served on a later pass instead of with an emergency-style stop.
+        origin = self._pos(now)
+        if self.moving:
+            origin += motion.sign(self.direction) * INSERT_CUTOFF_FLOORS
+        self.route = motion.insert_in_sweep(self.route, origin, stop)
         self.version += 1
         self.dests[pid] = (floor, DestStatus.PENDING)
         self._event(now, out, E.DEST_ACCEPTED, floor=floor, passenger_id=pid)
@@ -687,6 +739,12 @@ class Cabin:
             self._end_mission()
         elif msg.action == MissionAction.LOADED and self.phase == MissionPhase.AT_PICKUP:
             self.cargo_kg = msg.weight_kg
+            if self.load_kg > MAX_LOAD_KG:
+                # FRT-03: staff confirmation alone is not enough; the cabin's own load check
+                # must pass. Wait at the pickup for a lighter load or LOAD_FAILED.
+                details = f"{self.load_kg:g} kg loaded"
+                self._alert(now, out, AlertKind.OVERLOAD, ref_id=self.mission_id, details=details)
+                return
             self._event(now, out, E.MISSION_PICKUP_DONE, ref_id=self.mission_id)
             self._mission_status(now, out, MissionStatus.IN_PROGRESS)
             self.route = [s for s in self.route if s.kind != StopKind.MISSION_PICKUP]
