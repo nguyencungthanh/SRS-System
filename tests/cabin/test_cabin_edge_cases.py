@@ -506,6 +506,28 @@ def test_EC_08f_D_52_confirmation_for_another_mission_is_ignored():
     assert at(bus, "P1", E.MISSION_PICKUP_DONE) == [70.0]
 
 
+def test_EC_08h_D_52_last_passenger_leaves_at_the_freight_pickup_itself():
+    """Found by system stress seed 4: the drop-off floor IS the mission pickup floor."""
+    rider = Passenger(passenger_id="PAX-1", destination=1)
+    bus, _ = bus_with(CabinInit(car_id="P1", floor=10, passengers=(rider,)))
+    propose(
+        bus, 0.0, [dest(1, "PAX-1"), pickup(1), dropoff(30)], 0, mission_id="MS-1", exclusive=True
+    )
+    inject_all(
+        bus,
+        [
+            PassengerExit(t_sim=19.5, car_id="P1", passenger_id="PAX-1"),  # doors open 19-23
+            confirm(20.0, MissionAction.LOADED),  # staff load while the doors are open
+        ],
+    )
+    bus.run_until(90.0)
+    assert at(bus, "P1", E.HANDOFF_OK) == [19.5]
+    assert at(bus, "P1", E.MISSION_PICKUP_DONE) == [20.0]
+    assert at(bus, "P1", E.DOOR_OPENING, 1) == [18.0]  # no close-and-reopen at the pickup
+    assert at(bus, "P1", E.CAR_DEPARTED, 1) == [24.0]
+    assert at(bus, "P1", E.CAR_ARRIVED, 30) == [82.0]
+
+
 def test_EC_08g_FRT_02_dispatch_putting_the_pickup_before_a_passenger_stop_is_refused():
     rider = Passenger(passenger_id="PAX-1", destination=5)
     bus, _ = bus_with(CabinInit(car_id="P1", floor=27, passengers=(rider,)))
