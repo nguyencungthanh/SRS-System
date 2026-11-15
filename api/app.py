@@ -19,7 +19,8 @@ Every POST answers a ``contracts.ui.CommandResult`` {ok, id, reason}:
     403 UNAUTHORIZED_ROLE      wrong role; nothing reaches the simulation
     409 <RejectReason>         the simulation refused (e.g. INVALID_STATE when stopped)
     422 reason=None + detail   the body is malformed (Huy's decision, 14/11)
-    501 reason=None + detail   /optimization/run: no SimControl method yet (gap sent to An)
+    /optimization/run          body {method: GRID | SATSA, quick: bool = true}; 200 id=run_id,
+                               409 INVALID_STATE while another run is still going (D-68)
 """
 
 import json
@@ -62,7 +63,7 @@ ENGINE_COMMANDS: dict[str, tuple[SimCommand, dict[str, type]]] = {
 }
 
 HTTP_OK, HTTP_FORBIDDEN, HTTP_CONFLICT = 200, 403, 409
-HTTP_UNPROCESSABLE, HTTP_NOT_IMPLEMENTED = 422, 501
+HTTP_UNPROCESSABLE = 422
 
 
 def create_app(control: SimControl, web_dir: Path | None = WEB_DIR) -> FastAPI:
@@ -80,7 +81,7 @@ def create_app(control: SimControl, web_dir: Path | None = WEB_DIR) -> FastAPI:
         elif cmd.path in ENGINE_COMMANDS:
             post(cmd.path, _engine_endpoint(control, cmd))
 
-    post(OPTIMIZATION_PATH, _optimization_endpoint(by_path[OPTIMIZATION_PATH]))
+    post(OPTIMIZATION_PATH, _optimization_endpoint(control, by_path[OPTIMIZATION_PATH]))
     speed_cmd = Command(SPEED_PATH, None, by_path["/sim/start"].roles, "body: {factor}")
     post(SPEED_PATH, _speed_endpoint(control, speed_cmd))
 
@@ -217,19 +218,22 @@ def _speed_endpoint(control: SimControl, cmd: Command):
     return endpoint
 
 
-def _optimization_endpoint(cmd: Command):
+def _optimization_endpoint(control: SimControl, cmd: Command):
+    """OPT-06, D-68: start a GRID or SATSA run; it answers the run_id at once."""
+
     async def endpoint(request: Request) -> JSONResponse:
         try:
-            check_role(cmd, parse_role(await _json_body(request)))
+            body = await _json_body(request)
+            check_role(cmd, parse_role(body))
+            method = require(body, "method", str)
+            quick = body.get("quick", True)
+            if not isinstance(quick, bool):
+                raise BadRequest(f"quick: expected bool, got {type(quick).__name__}")
         except Refused as err:
             return _result(HTTP_FORBIDDEN, ok=False, reason=err.reason.value)
         except BadRequest as err:
             return _result(HTTP_UNPROCESSABLE, ok=False, detail=str(err))
-        return _result(
-            HTTP_NOT_IMPLEMENTED,
-            ok=False,
-            detail="SimControl has no way to start an optimization run yet (asked An)",
-        )
+        return _from_sim(control.control(SimCommand.OPTIMIZE, method=method, quick=quick))
 
     endpoint.__name__ = "optimization_run"
     return endpoint

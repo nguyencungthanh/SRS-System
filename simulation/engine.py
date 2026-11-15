@@ -9,7 +9,6 @@ run can be replayed exactly (SIM-03, LOG-02, NFR-05, D-59).
 import dataclasses
 import hashlib
 import json
-import math
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -18,11 +17,12 @@ from typing import IO, Any
 from contracts import CONTRACT_VERSION
 from contracts.codec import from_dict, to_dict
 from contracts.config import CAR_ORDER, Policy
-from contracts.enums import CallStatus, EventType, ServiceEventType, SimState
+from contracts.enums import EventType, SimState
 from contracts.interfaces import CabinModule, ControlCenterModule, DispatchModule
 from contracts.messages import CabinInit, Message
 from contracts.ui import FleetCarView, MetricsView, Snapshot
 from simulation.bus import Bus, LogEntry
+from simulation.metrics import RunObserver
 from simulation.passengers import PassengerAgent
 from simulation.scenario import Scenario
 
@@ -73,8 +73,7 @@ class Engine:
         self._open_log()
         self.inputs: list[dict[str, Any]] = []
         self._last_tel: dict[str, float] = {}
-        self._created: dict[str, float] = {}
-        self._waits: list[float] = []
+        self.observer = RunObserver()
         self._last_events: deque[str] = deque(maxlen=LAST_EVENTS)
         self.bus = Bus(
             [self.dispatch, self.cc, *self.cabins.values(), self.passengers],
@@ -207,21 +206,15 @@ class Engine:
             "alerts": cc["alerts"],
             "metrics": self.metrics(),
             "last_events": list(self._last_events),
+            "optimization": {"runs": []},  # filled by app/runner.py (D-68)
         }
 
     def metrics(self) -> MetricsView:
-        """Pickup waits per D-30 (served time - created_at, nearest-rank percentiles)."""
-        waits = sorted(self._waits)
-        unserved = sum(
-            1 for c in self.dispatch.snapshot()["calls"] if c["status"] != CallStatus.SERVED
-        )
+        """Waits per D-30, calls not yet served, commitment delay violations per D-63."""
         return {
-            "mean_wait": sum(waits) / len(waits) if waits else None,
-            "median_wait": _nearest_rank(waits, 0.50),
-            "p95_wait": _nearest_rank(waits, 0.95),
-            "max_wait": waits[-1] if waits else None,
-            "unserved": unserved,
-            "delay_violations": 0,  # D-61: measured by the evaluator (AN-03)
+            **self.observer.wait_stats(),  # type: ignore[typeddict-item]
+            "unserved": self.observer.unserved,
+            "delay_violations": self.observer.delay_violations,
         }
 
     # --- log --------------------------------------------------------------------------
@@ -237,28 +230,15 @@ class Engine:
         if self._log_file is not None:
             self._log_file.write(_line(entry) + "\n")
         kind = entry.get("msg_type")
-        t = entry["t_sim"]
         if kind == "CabinTelemetry":
-            self._last_tel[entry["car_id"]] = t
-        elif kind == "HallCallAck" and entry["accepted"] and not entry["duplicate"]:
-            self._created[entry["request_id"]] = t
-        elif kind == "ServiceEvent" and entry["event"] == ServiceEventType.HALL_CALL_SERVED:
-            created = self._created.pop(entry["ref_id"], None)
-            if created is not None:
-                self._waits.append(t - created)
+            self._last_tel[entry["car_id"]] = entry["t_sim"]
+        self.observer.observe(entry)
         if kind not in QUIET_TYPES:
             self._last_events.append(_describe(entry))
 
 
 def _line(entry: LogEntry) -> str:
     return json.dumps(entry, sort_keys=True, separators=(",", ":"))
-
-
-def _nearest_rank(sorted_values: list[float], q: float) -> float | None:
-    if not sorted_values:
-        return None
-    k = max(1, math.ceil(q * len(sorted_values)))
-    return sorted_values[k - 1]
 
 
 _SHOWN_FIELDS = (

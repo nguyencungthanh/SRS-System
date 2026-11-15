@@ -210,16 +210,25 @@
         </div>
         <div class="block form">
           <h3>Run an optimization</h3>
-          <p class="hint">Not available yet: the simulation has no way to start a run. Waiting on the framework.</p>
+          <p class="hint">Operator only. A run from here uses one short training trace (about a
+            minute). The full study is <code>python -m optimization --method compare</code>.</p>
           <label>Method
             <select id="opt-method"><option>SATSA</option><option>GRID</option></select>
           </label>
           <button type="button" data-optimize>Run optimization</button>
         </div>
+        <div class="block">
+          <h3>Optimization runs</h3>
+          <table class="list">
+            <thead><tr><th>Run</th><th>Method</th><th>Status</th><th>Pairs</th>
+              <th>Recommended (R, W)</th><th>J</th><th>J of (3, 5)</th><th>Decision</th><th></th></tr></thead>
+            <tbody id="opt-runs"><tr><td colspan="9" class="hint">No run yet.</td></tr></tbody>
+          </table>
+        </div>
         <form id="policy-form" class="block form">
           <h3>Approve or reject a recommended policy</h3>
-          <p class="hint">Supervisor only. Recommendations are not shown here yet, so type the run
-            number from the event log (for example RUN-0001). Nothing changes until a supervisor approves.</p>
+          <p class="hint">Supervisor only. Use the buttons in the table above, or type a run
+            number (for example RUN-0001). Nothing changes until a supervisor approves.</p>
           <label>Run <input name="run_id" placeholder="RUN-0001" required></label>
           <button type="submit" name="op" value="approve">Approve policy</button>
           <button type="submit" name="op" value="reject">Reject policy</button>

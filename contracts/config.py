@@ -79,3 +79,7 @@ HOLDOUT_SEEDS = (101, 102, 103, 104, 105)
 TRACE_DURATION_S = 1800.0  # random Hall Calls are generated in [0, this)
 DRAIN_S = 300.0  # D-31: extra time without new calls before counting unserved
 SATSA_MAX_EVALS = 30  # D-35: unique (R, W) evaluations per SATSA run
+TRAFFIC_MEAN_INTERVAL_S = 12.0  # D-64: Poisson arrivals, one passenger every 12 s on average
+QUICK_TRACE_S = 600.0  # D-65: a run started from the UI uses one short trace ...
+QUICK_SEEDS = (1,)  # ... and one training seed, so it finishes in about a minute
+QUICK_HOLDOUT_SEEDS = (101,)

@@ -114,3 +114,88 @@ def test_D_58_runner_replay_command(tmp_path):
     runner.engine.save_trace(path)
     assert runner.control(SimCommand.REPLAY, trace=str(path))["id"] == "IDENTICAL"
     assert not runner.control(SimCommand.REPLAY, trace=str(tmp_path / "missing.jsonl"))["ok"]
+
+
+# --- OPTIMIZE from the UI (D-65, D-68, OPT-06) -------------------------------------------
+
+import threading  # noqa: E402
+
+from contracts.enums import Role  # noqa: E402
+from contracts.messages import PolicyActivated, PolicyDecision, PolicyRecommended  # noqa: E402
+from optimization.report import Outcome  # noqa: E402
+
+
+def fake_optimizer(best=(2, 3), gate: threading.Event | None = None, fail=False):
+    def run(method, quick, progress):
+        progress(0.5, 3)
+        if gate is not None:
+            gate.wait(5)
+        if fail:
+            raise RuntimeError("boom")
+        return Outcome(method, best, 40.0 if best else None, 45.0, 6)
+
+    return run
+
+
+def _view(runner, run_id):
+    return next(r for r in runner.snapshot()["optimization"]["runs"] if r["run_id"] == run_id)
+
+
+def test_OPT_06_D_68_ui_run_recommend_approve_activate():
+    runner = SimRunner(FAKES, "AT-01", optimizer=fake_optimizer())
+    runner.control(SimCommand.START)
+    result = runner.control(SimCommand.OPTIMIZE, method="SATSA", quick=True)
+    assert result["ok"] and result["id"] == "RUN-0001"
+    runner.wait_for_optimizations()
+    view = _view(runner, "RUN-0001")
+    assert (view["status"], view["best"], view["decision"]) == (
+        "DONE",
+        {"version": "POL-0001", "R": 2, "W": 3},
+        "PENDING",
+    )
+    assert (view["objective"], view["baseline_objective"], view["evaluated"]) == (40.0, 45.0, 6)
+    runner.tick(0.1)
+    (rec,) = runner.engine.bus.select(PolicyRecommended)
+    assert rec.run_id == "RUN-0001" and (rec.policy.R, rec.policy.W) == (2, 3)
+    assert rec.scenario_set == ("QUICK-1",)
+    runner.submit(PolicyDecision(t_sim=0.0, run_id="RUN-0001", approve=True, role=Role.SUPERVISOR))
+    runner.tick(0.1)
+    assert runner.engine.bus.select(PolicyActivated)
+    assert _view(runner, "RUN-0001")["decision"] == "APPROVED"
+    assert runner.snapshot()["policy"] == {"version": "POL-0001", "R": 2, "W": 3}
+
+
+def test_D_68_one_run_at_a_time_and_bad_method_refused():
+    gate = threading.Event()
+    runner = SimRunner(FAKES, "AT-01", optimizer=fake_optimizer(gate=gate))
+    assert runner.control(SimCommand.OPTIMIZE, method="GRID")["ok"]
+    assert not runner.control(SimCommand.OPTIMIZE, method="GRID")["ok"]  # still running
+    assert _view(runner, "RUN-0001")["status"] == "RUNNING"
+    gate.set()
+    runner.wait_for_optimizations()
+    assert not runner.control(SimCommand.OPTIMIZE, method="RANDOM")["ok"]
+
+
+def test_D_68_failures_and_rejections_are_shown_not_raised():
+    runner = SimRunner(FAKES, "AT-01", optimizer=fake_optimizer(fail=True))
+    runner.control(SimCommand.OPTIMIZE, method="GRID")
+    runner.wait_for_optimizations()
+    view = _view(runner, "RUN-0001")
+    assert view["status"] == "FAILED" and "boom" in view["detail"]
+    runner.optimizer = fake_optimizer(best=None)
+    runner.control(SimCommand.OPTIMIZE, method="GRID")
+    runner.wait_for_optimizations()
+    assert _view(runner, "RUN-0002")["status"] == "FAILED"
+    assert not runner.engine.bus.select(PolicyRecommended)
+
+
+def test_D_68_reset_offers_a_pending_recommendation_again():
+    runner = SimRunner(FAKES, "AT-01", optimizer=fake_optimizer())
+    runner.control(SimCommand.OPTIMIZE, method="SATSA")
+    runner.wait_for_optimizations()
+    runner.tick(0.1)
+    runner.control(SimCommand.RESET, scenario="AT-02")  # a fresh, paused engine
+    runner.control(SimCommand.START)
+    runner.tick(0.1)
+    assert len(runner.engine.bus.select(PolicyRecommended)) == 1  # offered again
+    assert _view(runner, "RUN-0001")["decision"] == "PENDING"
