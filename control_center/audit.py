@@ -31,8 +31,18 @@ class AuditAction(StrEnum):
 
 class AuditOutcome(StrEnum):
     APPROVED = "APPROVED"  # the privileged action was granted
+    REJECTED = "REJECTED"  # a supervisor's decision to reject (e.g. a policy run)
     REFUSED = "REFUSED"  # the action was refused; ``reason`` says why
     RECORDED = "RECORDED"  # an event to remember, nothing to grant (alerts, fire cleared)
+
+
+class PolicyRunStatus(StrEnum):
+    """Approval status of one recommended policy run (OPT-06)."""
+
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 @dataclass(frozen=True, kw_only=True)

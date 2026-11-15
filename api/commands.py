@@ -8,13 +8,18 @@ there is no hand-written code per endpoint:
        also passed into the message, so Control Center checks it a second time.
     2. type check of plain fields (int / float / str / bool). ``contracts.codec`` converts
        enums and nested types but passes plain values through unchanged, so without this a
-       floor sent as "abc" would reach a module and crash it.
+       floor sent as "abc" would reach a module and crash it. Non-finite numbers (NaN,
+       Infinity) are refused earlier, when the body is parsed (``parse_body``).
+       A missing field whose type allows None is passed as None, so the module answers
+       with its own reason (e.g. MISSING_FIELD); any other missing field is a 422.
     3. ``contracts.codec.from_dict`` builds the message. ``t_sim`` is a placeholder:
        ``SimControl.submit`` stamps the real simulation time.
 """
 
+import json
+import math
 import types
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from contracts.codec import TYPE_KEY, from_dict
@@ -37,6 +42,35 @@ class Refused(Exception):
     reason: RejectReason
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # e.g. 1e400 parses to inf
+        raise BadRequest(f"number out of range: {text}")
+    return value
+
+
+def _no_constant(name: str) -> float:
+    raise BadRequest(f"{name} is not allowed")  # NaN, Infinity, -Infinity
+
+
+def parse_body(raw: bytes) -> dict[str, Any]:
+    """Parse a JSON object body. Refuses NaN / Infinity (Python's json accepts them, but they
+    would poison module state and make the snapshot invalid JSON) and very deep nesting."""
+    if not raw:
+        return {}
+    try:
+        body = json.loads(raw, parse_float=_finite_float, parse_constant=_no_constant)
+    except BadRequest:
+        raise
+    except RecursionError as err:
+        raise BadRequest("the body is nested too deeply") from err
+    except ValueError as err:  # includes JSONDecodeError and UnicodeDecodeError
+        raise BadRequest("the body is not valid JSON") from err
+    if not isinstance(body, dict):
+        raise BadRequest("the body must be a JSON object")
+    return body
+
+
 def parse_role(body: dict[str, Any]) -> Role | None:
     raw = body.get(ROLE_KEY)
     if raw is None:
@@ -45,6 +79,16 @@ def parse_role(body: dict[str, Any]) -> Role | None:
         return Role(raw)
     except ValueError as err:
         raise BadRequest(f"unknown role {raw!r}") from err
+
+
+def require(body: dict[str, Any], key: str, tp: type) -> Any:
+    """An optional engine-command argument of exactly type ``tp`` (bool is not an int)."""
+    value = body.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, tp):
+        raise BadRequest(f"{key}: expected {tp.__name__}, got {type(value).__name__}")
+    return value
 
 
 def check_role(cmd: Command, role: Role | None) -> None:
@@ -57,8 +101,15 @@ def build_message(cmd: Command, body: dict[str, Any]) -> Message:
     assert cmd.message is not None, f"{cmd.path} is an engine command, not a message"
     cls = cmd.message
     hints = get_type_hints(cls)
-    names = {f.name for f in fields(cls)} - BASE_FIELDS
-    data = {k: v for k, v in body.items() if k in names}
+    own = [f for f in fields(cls) if f.name not in BASE_FIELDS]
+    data = {f.name: body[f.name] for f in own if f.name in body}
+    for f in own:
+        if f.name in data or f.default is not MISSING or f.default_factory is not MISSING:
+            continue
+        if type(None) in get_args(hints[f.name]):
+            data[f.name] = None  # the module decides (e.g. MISSING_FIELD), same as null
+        else:
+            raise BadRequest(f"missing field: {f.name}")
     for name, value in data.items():
         _check_plain(name, hints[name], value)
     try:

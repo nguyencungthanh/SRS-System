@@ -66,6 +66,15 @@
           </table>
         </div>
 
+        <div class="block">
+          <h3>Refused requests</h3>
+          <p class="hint">Requests the system turned down, newest first (SRS 5.3 audit record).</p>
+          <table class="list">
+            <thead><tr><th>Time</th><th>Role</th><th>Request</th><th>Why</th></tr></thead>
+            <tbody id="refusals"></tbody>
+          </table>
+        </div>
+
         <form id="mission-form" class="block form">
           <h3>Request a mission</h3>
           <p class="hint">Medical missions need the medical coordinator role, freight needs building staff.</p>
@@ -94,11 +103,16 @@
       <div class="panel" data-panel="sim" role="tabpanel" hidden>
         <div class="block controls">
           <h3>Session</h3>
+          <p class="hint">To replay, record a trace first, e.g.
+            <code>python -m app.headless --scenario AT-01 --trace run.jsonl</code>, then enter its path.
+            The result says whether the new run is IDENTICAL to the recorded one.</p>
           <button type="button" data-sim="start">Start</button>
           <button type="button" data-sim="pause">Pause</button>
           <label>Scenario <select id="scenario"></select></label>
           <label>Seed <input id="seed" type="number" value="0" min="0"></label>
           <button type="button" data-sim="reset">Reset</button>
+          <label>Replay trace <input id="trace" placeholder="run.jsonl"></label>
+          <button type="button" data-sim="replay">Replay</button>
           <label>Speed
             <select id="speed">
               <option value="0.5">0.5×</option>
