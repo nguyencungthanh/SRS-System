@@ -58,7 +58,9 @@ body {
   margin: 0;
   display: grid;
   grid-template-rows: auto auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr); /* never wider than the window */
   min-height: 100vh;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--ink);
   font: 14px/1.45 var(--font);
@@ -82,7 +84,7 @@ button, select, input { font: inherit; color: inherit; }
 .brand strong { font-size: 1.05rem; }
 .brand span { color: var(--muted); }
 
-.stories { display: flex; flex-wrap: wrap; gap: 0.35rem; flex: 1; }
+.stories { display: flex; flex-wrap: wrap; gap: 0.35rem; flex: 1; min-width: 0; }
 
 .stories button {
   border: 1px solid var(--rule);
@@ -224,6 +226,7 @@ button, select, input { font: inherit; color: inherit; }
 
 .lane-head {
   display: flex;
+  min-width: 0;
   align-items: baseline;
   gap: 0.6rem;
   padding: 0.4rem 0.75rem;
@@ -231,8 +234,9 @@ button, select, input { font: inherit; color: inherit; }
   border-radius: 0 7px 0 0;
 }
 .lane-head .name { font-weight: 700; color: var(--c); }
-.lane-head .role { color: var(--muted); font-size: 0.85rem; }
-.lane-head .last { margin-left: auto; font-size: 0.8rem; color: var(--muted); }
+.lane-head .role { color: var(--muted); font-size: 0.85rem; flex-shrink: 1; min-width: 0; }
+.lane-head .name { white-space: nowrap; }
+.lane-head .last { margin-left: auto; min-width: 0; font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .lane-body {
   display: grid;
@@ -409,9 +413,25 @@ button, select, input { font: inherit; color: inherit; }
 .toggles { display: flex; flex-direction: column; gap: 0.1rem; font-size: 0.8rem; color: var(--muted); }
 .source { font-size: 0.72rem; }
 
-@media (max-width: 1100px) {
-  .stage { grid-template-columns: 1fr; }
-  .building-wrap { height: 70vh; }
+/* Narrower screens (the app's side pane, a laptop): keep lanes left and building right,
+   put the code under the explanation, and let the story tabs scroll sideways. */
+@media (max-width: 1250px) {
+  .stage { grid-template-columns: minmax(0, 1fr) 290px; gap: 0.5rem; padding: 0.5rem; }
   .lane-body { grid-template-columns: 1fr; }
-  .controls { grid-template-columns: 1fr; }
+  .stories { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  .brand span, .back { display: none; }
+  .caption { grid-template-columns: 1fr; min-height: 0; }
+  .caption-side { align-items: flex-start; max-width: none; }
+  .reqs { justify-content: flex-start; }
+  .moment { font-size: 1.05rem; }
+  .legend { display: none; }
+}
+
+/* Phones: one column, the page scrolls, the controls stay at the bottom. */
+@media (max-width: 760px) {
+  body { display: block; }
+  .stage { grid-template-columns: 1fr; }
+  .lanes { overflow: visible; }
+  .building-wrap { height: 80vh; }
+  .controls { position: sticky; bottom: 0; z-index: 5; grid-template-columns: 1fr; gap: 0.4rem; }
 }
