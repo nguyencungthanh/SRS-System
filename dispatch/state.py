@@ -32,6 +32,7 @@ class Mission:
     status: MissionStatus = MissionStatus.APPROVED
     owner: str | None = None
     rejected: dict[str, Any] = field(default_factory=dict)
+    delivered: bool = False  # MISSION_DELIVERY_DONE seen from the owner (D-62)
 
 
 @dataclass

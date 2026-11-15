@@ -150,13 +150,8 @@ def test_SY_24a_EMG_05_medical_car_breaks_down_on_the_way_the_operator_is_told()
     assert view["status"] != "RESERVED", view
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F-1 (Dispatch, Thanh): after the reserved car fails, the medical mission is "
-    "never offered to another car; Dispatch records it as COMPLETED when the car drops it "
-    "(dispatch/controller.py:182-185). See SYSTEM_EDGE_CASES.md.",
-)
 def test_SY_24b_MED_04_patient_still_picked_up_by_another_car():
+    # F-1 fixed by D-62 (Dispatch re-selects a mission released by a held car).
     r = _medical_car_breaks_down()
     pickups = [e for e in r.events(E.MISSION_PICKUP_DONE) if e.ref_id == "MS-0001"]
     assert pickups and pickups[0].car_id != "P2", r.statuses("MS-0001")
