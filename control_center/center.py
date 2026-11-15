@@ -41,7 +41,7 @@ from contracts.messages import (
 )
 from contracts.routing import CONTROL_CENTER
 from contracts.ui import AlertView, ControlCenterSnapshot, MissionView
-from control_center.audit import AuditAction, AuditEntry, AuditOutcome
+from control_center.audit import AuditAction, AuditEntry, AuditOutcome, PolicyRunStatus
 from control_center.permissions import (
     ALERT_ACK_ROLES,
     POLICY_ROLES,
@@ -52,6 +52,17 @@ from control_center.permissions import (
 
 # Modes from which a supervisor may authorise the return to AUTO (EMG-04).
 RECOVERABLE_MODES: frozenset[CabinMode] = frozenset({CabinMode.FAULT_HOLD, CabinMode.MAINTENANCE})
+
+# Mission statuses after which no update is accepted, and statuses that mean "no car".
+TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {MissionStatus.REJECTED, MissionStatus.COMPLETED, MissionStatus.FAILED}
+)
+CARLESS_STATUSES: frozenset[MissionStatus] = frozenset({MissionStatus.UNAVAILABLE})
+
+# F13: the snapshot must not grow without limit. Unfinished missions and unacknowledged
+# alerts are always kept (UI-04, EMG-05); only the oldest finished / acknowledged go.
+MAX_FINISHED_MISSIONS = 100
+MAX_ACKED_ALERTS = 100
 
 ALARM_DETAILS = "Alarm button pressed"
 FIRE_DETAILS = "Fire alarm active"
@@ -65,12 +76,18 @@ class ControlCenter:
         self._alerts: dict[str, AlertView] = {}
         self._car_modes: dict[str, CabinMode] = {}
         self._recommendations: dict[str, PolicyRecommended] = {}
+        self._run_status: dict[str, PolicyRunStatus] = {}  # OPT-06: approval status per run
         self._audit: list[AuditEntry] = []
         self._mission_ids = IdGen(PREFIX_MISSION)
 
     # --- Module interface ------------------------------------------------------------
 
     def handle(self, msg: Message, now: float) -> list[Message]:
+        out = self._dispatch(msg, now)
+        self._prune()
+        return out
+
+    def _dispatch(self, msg: Message, now: float) -> list[Message]:
         out: list[Message] = []
         match msg:
             case MissionRequest():
@@ -152,7 +169,7 @@ class ControlCenter:
                 origin=msg.origin,
                 destination=msg.destination,
                 allowed_cars=allowed_cars(msg.mission_type),
-                material=msg.material,
+                material=msg.material.strip() if msg.material else msg.material,
                 weight_kg=msg.weight_kg,
             )
         )
@@ -163,21 +180,25 @@ class ControlCenter:
         view = self._missions.get(msg.mission_id)
         if view is None:
             return  # not a mission this Control Center approved
+        if view["status"] in TERMINAL_STATUSES:
+            return  # finished missions never change again (F11)
         was_unavailable = view["status"] == MissionStatus.UNAVAILABLE
         view["status"] = msg.status.value
+        # Each update describes the mission as it is now, so nothing from an older update
+        # may linger (F11: RESERVED on P2 then UNAVAILABLE must not still show P2).
         if msg.car_id is not None:
             view["car_id"] = msg.car_id
-        if msg.reason is not None:
-            view["reason"] = msg.reason.value
-        if msg.candidates:
-            view["candidates"] = [
-                {
-                    "car_id": c.car_id,
-                    "eta_s": c.eta_s,
-                    "excluded": c.excluded.value if c.excluded else None,
-                }
-                for c in msg.candidates
-            ]
+        elif msg.status in CARLESS_STATUSES:
+            view["car_id"] = None
+        view["reason"] = msg.reason.value if msg.reason else None
+        view["candidates"] = [
+            {
+                "car_id": c.car_id,
+                "eta_s": c.eta_s,
+                "excluded": c.excluded.value if c.excluded else None,
+            }
+            for c in msg.candidates
+        ]
         if msg.status == MissionStatus.UNAVAILABLE and not was_unavailable:
             self._raise_alert(
                 msg.msg_id,
@@ -250,36 +271,81 @@ class ControlCenter:
             out.append(RecoveryApproved(t_sim=now, car_id=msg.car_id, approved_by=msg.role))
 
     # --- HY-04 policy registry -------------------------------------------------------
+    #
+    # Each recommended run has a status (OPT-06):
+    #   PENDING -> ACTIVE (supervisor approves) or REJECTED (supervisor rejects)
+    #   REJECTED -> ACTIVE (a rejected run may still be approved later: contract test OPT-06)
+    #   ACTIVE -> SUPERSEDED (another run is approved)
+    # Approving the run that is already ACTIVE is refused, so Dispatch never receives the
+    # same PolicyActivated twice. Run ids are unique: a repeated recommendation is refused.
+
+    def policy_runs(self) -> dict[str, PolicyRunStatus]:
+        """Approval status per run, oldest first (not part of the snapshot, see A2)."""
+        return dict(self._run_status)
 
     def _on_recommended(self, msg: PolicyRecommended, now: float) -> None:
+        details = f"{msg.policy.version} R={msg.policy.R} W={msg.policy.W}"
+        if msg.run_id in self._recommendations:
+            self._record(
+                now,
+                AuditAction.POLICY_RECOMMENDED,
+                AuditOutcome.REFUSED,
+                msg.run_id,
+                reason=RejectReason.INVALID_STATE,
+                details=f"duplicate run id; kept the first ({details})",
+            )
+            return
         self._recommendations[msg.run_id] = msg
+        self._run_status[msg.run_id] = PolicyRunStatus.PENDING
         self._record(
-            now,
-            AuditAction.POLICY_RECOMMENDED,
-            AuditOutcome.RECORDED,
-            msg.run_id,
-            details=f"{msg.policy.version} R={msg.policy.R} W={msg.policy.W}",
+            now, AuditAction.POLICY_RECOMMENDED, AuditOutcome.RECORDED, msg.run_id, details=details
         )
 
     def _on_policy_decision(self, msg: PolicyDecision, now: float, out: list[Message]) -> None:
+        status = self._run_status.get(msg.run_id)
         reason: RejectReason | None = None
         if msg.role not in POLICY_ROLES:
             reason = RejectReason.UNAUTHORIZED_ROLE
-        elif msg.run_id not in self._recommendations:
+        elif status is None:
             reason = RejectReason.UNKNOWN_ID
+        elif msg.approve and status == PolicyRunStatus.ACTIVE:
+            reason = RejectReason.INVALID_STATE  # already active: never activate twice
+        elif not msg.approve and status != PolicyRunStatus.PENDING:
+            reason = RejectReason.INVALID_STATE  # only a pending run can be rejected
+
+        if reason is not None:
+            outcome = AuditOutcome.REFUSED
+        else:
+            outcome = AuditOutcome.APPROVED if msg.approve else AuditOutcome.REJECTED
         self._record(
             now,
             AuditAction.POLICY_DECISION,
-            AuditOutcome.REFUSED if reason is not None else AuditOutcome.APPROVED,
+            outcome,
             msg.run_id,
             role=msg.role,
             reason=reason,
             details="approve" if msg.approve else "reject",
         )
-        if reason is None and msg.approve:
-            out.append(PolicyActivated(t_sim=now, policy=self._recommendations[msg.run_id].policy))
+        if reason is not None:
+            return
+        if not msg.approve:
+            self._run_status[msg.run_id] = PolicyRunStatus.REJECTED
+            return
+        for run_id, run_status in self._run_status.items():
+            if run_status == PolicyRunStatus.ACTIVE:
+                self._run_status[run_id] = PolicyRunStatus.SUPERSEDED
+        self._run_status[msg.run_id] = PolicyRunStatus.ACTIVE
+        out.append(PolicyActivated(t_sim=now, policy=self._recommendations[msg.run_id].policy))
 
     # --- helpers ---------------------------------------------------------------------
+
+    def _prune(self) -> None:
+        finished = [mid for mid, v in self._missions.items() if v["status"] in TERMINAL_STATUSES]
+        for mid in finished[: max(0, len(finished) - MAX_FINISHED_MISSIONS)]:
+            del self._missions[mid]
+        acked = [aid for aid, v in self._alerts.items() if v["acknowledged"]]
+        for aid in acked[: max(0, len(acked) - MAX_ACKED_ALERTS)]:
+            del self._alerts[aid]
 
     def _record(
         self,

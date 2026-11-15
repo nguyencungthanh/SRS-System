@@ -8,15 +8,18 @@
 "use strict";
 
 // Copied from contracts/config.py (the browser cannot import Python). Keep in sync.
+// The list of cars is NOT copied: scenarios use different fleets (AT-04 has only P1 and
+// G1), so it always comes from the snapshot (see syncFleet).
 const FLOORS = 40;
-const CARS = ["P1", "P2", "P3", "P4", "G1"];
 const FULL_LOAD_KG = 900;
 const MAX_LOAD_KG = 1000;
 
 const POLL_MS = 500;            // fallback refresh when /ws is not available
-const STALE_TELEMETRY_S = 2.0;  // dim a car whose telemetry is older than this
+const TELEMETRY_STALE_S = 3.0;  // contracts/config.py: older telemetry makes a car ineligible
 const TOAST_MS = 3500;
 const EVENTS_SHOWN = 50;
+const AUDIT_MS = 2000;          // how often the refused-requests list is refreshed
+const AUDIT_SHOWN = 30;
 const SERVED_SHOWN_S = 15;      // UI-03: how long (simulated seconds) a served destination stays green
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -61,6 +64,7 @@ const REASON_TEXT = {
   OVER_PAYLOAD: `Freight can weigh at most ${MAX_LOAD_KG} kg.`,
   UNKNOWN_ID: "That car, mission, alert or scenario does not exist.",
   INVALID_STATE: "Not possible in the current state (is the simulation stopped?).",
+  NOT_BOARDED: "that passenger is not on board",
 };
 
 function toast(text, ok) {
@@ -90,6 +94,7 @@ async function send(path, body = {}, doneText = "Sent", asRole = null) {
   }
   const result = await response.json().catch(() => ({ ok: false }));
   if (result.ok) {
+    lastSendAt = Date.now();
     toast(doneText, true);
   } else if (response.status === 501) {
     toast("Not available yet: the simulation cannot start an optimization run.", false);
@@ -97,7 +102,30 @@ async function send(path, body = {}, doneText = "Sent", asRole = null) {
     toast(REASON_TEXT[result.reason] || result.detail || `Refused (${response.status}).`, false);
   }
   if (!liveSocket) refresh(); // polling mode: show the effect right away
+  if (!result.ok) refreshAudit();
   return result;
+}
+
+// F9: "accepted by the API" is not "done". For a few seconds after an action, refusals
+// that appear in the event log (a cabin rejecting a destination, a refused hall call or
+// mission) are shown as a toast, so the page never claims an outcome that did not happen.
+const REFUSAL_WINDOW_MS = 4000;
+const REFUSAL = /event=\w*REJECTED|accepted=False|status=REJECTED/;
+let lastSendAt = 0;
+let lastEventLine = null;
+
+function showNewRefusals(snap) {
+  const lines = snap.last_events;
+  const from = lastEventLine === null ? lines.length : lines.lastIndexOf(lastEventLine) + 1;
+  lastEventLine = lines.length ? lines[lines.length - 1] : null;
+  if (Date.now() - lastSendAt > REFUSAL_WINDOW_MS) return;
+  const refused = lines.slice(from).filter((line) => REFUSAL.test(line));
+  if (refused.length) {
+    const fields = Object.fromEntries([...refused[refused.length - 1].matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+    const what = [fields.car_id, fields.event || fields.status, fields.floor && `floor ${fields.floor}`]
+      .filter(Boolean).join(" ");
+    toast(`Refused: ${what}${fields.reason ? ` (${REASON_TEXT[fields.reason] || fields.reason})` : ""}`, false);
+  }
 }
 
 let liveSocket = null;
@@ -144,21 +172,31 @@ function stopPolling() {
   pollTimer = null;
 }
 
+let refreshing = false; // never two polls in flight: their answers could arrive out of order
+
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const response = await fetch("/snapshot");
     render(await response.json());
     if (!liveSocket) setLink("poll", `Refreshing every ${POLL_MS / 1000} s`);
   } catch {
     setLink("down", "Server not reachable");
+  } finally {
+    refreshing = false;
   }
 }
 
 // --- UI-01 fleet view ---------------------------------------------------------------
 
-function buildHoistway() {
+let fleet = []; // car ids of the running scenario, in snapshot order
+
+function buildHoistway(cars) {
   const hw = $("#hoistway");
+  hw.replaceChildren();
   hw.style.setProperty("--floors", FLOORS);
+  hw.style.setProperty("--cars", cars.length);
   const scale = document.createElement("div");
   scale.className = "floor-scale";
   for (let f = FLOORS; f >= 1; f -= 1) {
@@ -170,12 +208,12 @@ function buildHoistway() {
     }
   }
   hw.append(scale);
-  for (const car of CARS) {
+  for (const car of cars) {
     const shaft = document.createElement("div");
     shaft.className = "shaft";
     shaft.dataset.car = car;
-    shaft.innerHTML = `<span class="shaft-label">${car}</span><div class="stops"></div>
-      <div class="car" data-car="${car}"><span class="readout">-</span></div>`;
+    shaft.innerHTML = `<span class="shaft-label">${esc(car)}</span><div class="stops"></div>
+      <div class="car" data-car="${esc(car)}"><span class="readout">-</span></div>`;
     hw.append(shaft);
   }
   const lanterns = document.createElement("div");
@@ -194,7 +232,7 @@ function renderFleet(snap) {
     el.style.top = `calc(${fromTop(car.position) + 0.5} * var(--floor-h))`;
     el.dataset.door = car.door;
     el.dataset.mode = car.mode;
-    el.dataset.stale = String(car.telemetry_age_s !== null && car.telemetry_age_s > STALE_TELEMETRY_S);
+    el.dataset.stale = String(car.telemetry_age_s !== null && car.telemetry_age_s > TELEMETRY_STALE_S);
     $(".readout", el).textContent = `${car.floor_display}${car.direction === "IDLE" ? "" : ARROW[car.direction]}`;
     el.title = `${car.car_id}: floor ${car.floor_display}, door ${car.door}, ${car.mode}`;
     $(".stops", shaft).innerHTML = car.stops.map((s) => (
@@ -250,12 +288,19 @@ function renderAlerts(snap) {
 }
 
 function renderMissions(snap) {
+  // The table is redrawn on every snapshot: keep what the user typed in the weight fields.
+  const typed = Object.fromEntries($$("[data-weight-for]").map((i) => [i.dataset.weightFor, i.value]));
+  const focused = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.weightFor : undefined;
   $("#missions").innerHTML = snap.missions.length ? snap.missions.map((m) => {
     const excluded = m.candidates.filter((c) => c.excluded)
       .map((c) => `${esc(c.car_id)}: ${esc(c.excluded)}`).join(", ");
     const why = [m.reason, excluded && `excluded ${excluded}`].filter(Boolean).join("; ");
     const live = m.car_id && !["COMPLETED", "FAILED", "REJECTED", "UNAVAILABLE"].includes(m.status);
-    const actions = live ? `
+    const weight = m.mission_type === "FREIGHT"
+      ? `<input class="load-kg" type="number" min="1" step="1" placeholder="kg" aria-label="Loaded weight for ${esc(m.mission_id)}" data-weight-for="${esc(m.mission_id)}">`
+      : "";
+    const actions = live ? `${weight}
       <button type="button" data-confirm="LOADED" data-mission="${esc(m.mission_id)}" data-car="${esc(m.car_id)}">Loaded</button>
       <button type="button" data-confirm="UNLOADED" data-mission="${esc(m.mission_id)}" data-car="${esc(m.car_id)}">Unloaded</button>
       <button type="button" data-confirm="LOAD_FAILED" data-mission="${esc(m.mission_id)}" data-car="${esc(m.car_id)}">Load failed</button>` : "";
@@ -269,6 +314,24 @@ function renderMissions(snap) {
       <td class="row-actions">${actions}</td>
     </tr>`;
   }).join("") : '<tr><td colspan="7" class="quiet">No missions yet. Request one below.</td></tr>';
+  $$("[data-weight-for]").forEach((input) => {
+    const id = input.dataset.weightFor;
+    if (typed[id]) input.value = typed[id];
+    if (id === focused) input.focus();
+  });
+}
+
+// --- SRS 5.3 refused requests (GET /audit) -------------------------------------------
+
+async function refreshAudit() {
+  try {
+    const entries = await (await fetch("/audit")).json();
+    const rows = entries.slice(-AUDIT_SHOWN).reverse();
+    $("#refusals").innerHTML = rows.length ? rows.map((e) => `<tr>
+        <td>${fmt(e.t_sim)} s</td><td>${esc((e.role || "none").toLowerCase().replace("_", " "))}</td>
+        <td>${esc(e.command)}</td><td>${esc(REASON_TEXT[e.reason] || e.reason || `status ${e.status}`)}</td>
+      </tr>`).join("") : '<tr><td colspan="4" class="quiet">Nothing refused yet.</td></tr>';
+  } catch { /* the snapshot loop reports a lost server */ }
 }
 
 // --- UI-05 simulation console -------------------------------------------------------
@@ -331,13 +394,16 @@ function renderHall(snap) {
 
 // --- UI-03 cabin panel --------------------------------------------------------------
 
-let cabinCar = CARS[0];
+let cabinCar = null;
+
+function buildCabinPicker(cars) {
+  if (!cars.includes(cabinCar)) cabinCar = cars[0] ?? null;
+  $("#cabin-cars").innerHTML = cars.map((c) => (
+    `<button type="button" role="radio" aria-checked="${c === cabinCar}" data-cabin-car="${esc(c)}">${esc(c)}</button>`
+  )).join("");
+}
 
 function buildCabinPanel() {
-  const picker = $("#cabin-cars");
-  picker.innerHTML = CARS.map((c) => (
-    `<button type="button" role="radio" aria-checked="${c === cabinCar}" data-cabin-car="${c}">${c}</button>`
-  )).join("");
   const pad = $("#cabin-buttons");
   pad.innerHTML = Array.from({ length: FLOORS }, (_, i) => i + 1).map((f) => (
     `<button type="button" class="dest-btn" data-dest="${f}" aria-label="Go to floor ${f}">${f}</button>`
@@ -351,45 +417,50 @@ function selectCabinCar(car) {
 }
 
 
-// UI-03: a destination button is "pending" while the car has that CAR_DEST stop, and
-// "served" when the stop disappears while the car stands at that floor. The snapshot lists
-// only pending stops, so the page remembers each car's previous ones. A stop that vanishes
-// anywhere else (cancelled, fault) is not shown as served.
-const pendingBefore = new Map(); // car_id -> Set of floors
-const servedAt = new Map();      // "car:floor" -> t_sim when served
-let lastT = 0;
+// UI-03: destination states come from the Cabin's own record, ``snap.dests`` (DestView:
+// car, floor, passenger, PENDING or SERVED). The Cabin keeps a SERVED entry until that
+// passenger presses again, so the page shows "served" for SERVED_SHOWN_S simulated seconds
+// after it first sees it, then lets the button go dark.
+const servedSince = new Map(); // "car:floor:passenger" -> t_sim first seen SERVED
 
-function trackDestinations(snap) {
-  if (snap.t_sim < lastT) { pendingBefore.clear(); servedAt.clear(); } // reset or replay
-  lastT = snap.t_sim;
-  for (const car of snap.cars) {
-    const now = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
-    for (const floor of pendingBefore.get(car.car_id) || []) {
-      if (!now.has(floor) && car.floor_display === floor) servedAt.set(`${car.car_id}:${floor}`, snap.t_sim);
-    }
-    for (const floor of now) servedAt.delete(`${car.car_id}:${floor}`); // pressed again
-    pendingBefore.set(car.car_id, now);
+function trackDestinations(snap, isReset) {
+  if (isReset) servedSince.clear();
+  const current = new Set();
+  for (const d of snap.dests) {
+    if (d.status !== "SERVED") continue;
+    const key = `${d.car_id}:${d.floor}:${d.passenger_id}`;
+    current.add(key);
+    if (!servedSince.has(key)) servedSince.set(key, snap.t_sim);
   }
-  for (const [key, t] of servedAt) if (snap.t_sim - t > SERVED_SHOWN_S) servedAt.delete(key);
+  for (const key of servedSince.keys()) if (!current.has(key)) servedSince.delete(key);
 }
 
-function destinationState(carId, floor, pending) {
-  if (pending.has(floor)) return "pending";
-  return servedAt.has(`${carId}:${floor}`) ? "served" : "";
+function destinationState(snap, carId, floor) {
+  const here = snap.dests.filter((d) => d.car_id === carId && d.floor === floor);
+  if (here.some((d) => d.status === "PENDING")) return "pending";
+  const served = here.some((d) => {
+    const since = servedSince.get(`${d.car_id}:${d.floor}:${d.passenger_id}`);
+    return d.status === "SERVED" && since !== undefined && snap.t_sim - since <= SERVED_SHOWN_S;
+  });
+  return served ? "served" : "";
 }
 
 function renderCabin(snap) {
   const car = snap.cars.find((c) => c.car_id === cabinCar);
-  if (!car) return;
+  if (!car) { // no car in this scenario: show nothing rather than a previous car's state
+    $("#cabin-floor").textContent = "-";
+    $("#cabin-dir").textContent = "";
+    $("#cabin-status").textContent = "No car selected";
+    return;
+  }
   $("#cabin-floor").textContent = car.floor_display;
   $("#cabin-dir").textContent = car.direction === "IDLE" ? "" : ARROW[car.direction];
   const over = car.load_kg > MAX_LOAD_KG ? ", overload" : car.load_kg >= FULL_LOAD_KG ? ", full" : "";
   $("#cabin-status").textContent =
     `door ${car.door.toLowerCase()}, ${car.passengers} aboard, ${fmt(car.load_kg, 0)} kg${over}, ${car.mode}`;
-  const pending = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
   $$(".dest-btn").forEach((b) => {
     const floor = Number(b.dataset.dest);
-    const state = destinationState(car.car_id, floor, pending);
+    const state = destinationState(snap, car.car_id, floor);
     if (state) b.dataset.state = state; else delete b.dataset.state;
     b.setAttribute("aria-label", `Go to floor ${floor}${state ? ` (${state})` : ""}`);
   });
@@ -414,8 +485,13 @@ function renderPolicy(snap) {
 // --- render everything --------------------------------------------------------------
 
 function render(snap) {
+  // Time going backwards means reset or replay. (Out-of-order poll answers cannot cause
+  // it: refresh() never has two requests in flight.)
+  const isReset = lastSnapshot !== null && snap.t_sim < lastSnapshot.t_sim;
   lastSnapshot = snap;
-  trackDestinations(snap);
+  syncFleet(snap);
+  showNewRefusals(snap);
+  trackDestinations(snap, isReset);
   const state = $("#sim-state");
   state.textContent = snap.sim_state.toLowerCase();
   state.dataset.state = snap.sim_state;
@@ -440,10 +516,23 @@ function wireTabs() {
   }));
 }
 
-function fillCarSelects() {
+function fillCarSelects(cars) {
   $$(".car-select").forEach((sel) => {
-    sel.innerHTML = CARS.map((c) => `<option>${c}</option>`).join("");
+    const keep = sel.value;
+    sel.innerHTML = cars.map((c) => `<option>${esc(c)}</option>`).join("");
+    if (cars.includes(keep)) sel.value = keep;
   });
+}
+
+// UI-01: when the scenario's fleet changes (reset to AT-04, AT-05, ...), rebuild every
+// place that lists cars, so no shaft or picker shows a car that is not in the simulation.
+function syncFleet(snap) {
+  const ids = snap.cars.map((c) => c.car_id);
+  if (ids.join() === fleet.join()) return;
+  fleet = ids;
+  buildHoistway(ids);
+  buildCabinPicker(ids);
+  fillCarSelects(ids);
 }
 
 async function fillScenarios() {
@@ -477,12 +566,12 @@ function wireForms() {
       body.material = f.material.value;
       body.weight_kg = number(f.weight_kg.value);
     }
-    send("/mission", body, "Mission requested. Its status appears in the list above.");
+    send("/mission", body, "Mission request sent. Its status appears in the list above.");
   });
 
   $("#recovery-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    send("/recovery", { car_id: event.target.car_id.value }, "Recovery request sent.");
+    send("/recovery", { car_id: event.target.car_id.value }, "Recovery request sent. The car moves only after its own checks pass.");
   });
 
   $("#fault-form").addEventListener("submit", (event) => {
@@ -506,7 +595,7 @@ function wireForms() {
     event.preventDefault();
     const approve = !(event.submitter && event.submitter.value === "reject");
     send("/policy/approve", { run_id: event.target.run_id.value.trim(), approve },
-      approve ? "Policy approval sent." : "Policy rejection sent.");
+      approve ? "Policy approval sent. Nothing changes if the run number is unknown." : "Policy rejection sent.");
   });
 
   document.addEventListener("click", (event) => {
@@ -519,7 +608,7 @@ function wireForms() {
     if (t.dataset.cabinCar) selectCabinCar(t.dataset.cabinCar);
     if (t.dataset.dest) {
       send("/destination", { car_id: cabinCar, floor: Number(t.dataset.dest), passenger_id: passengerId() },
-        `Floor ${t.dataset.dest} pressed in ${cabinCar}.`, "PASSENGER");
+        `Floor ${t.dataset.dest} sent to ${cabinCar}.`, "PASSENGER");
     }
     if (t.dataset.door) {
       send("/door", { car_id: cabinCar, open: t.dataset.door === "true" },
@@ -527,10 +616,15 @@ function wireForms() {
     }
     if (t.hasAttribute("data-alarm")) send("/alarm", { car_id: cabinCar }, `Alarm pressed in ${cabinCar}.`, "PASSENGER");
     if (t.hasAttribute("data-optimize")) send("/optimization/run", { method: $("#opt-method").value }, "Optimization started.");
-    if (t.dataset.ack) send("/alert/ack", { alert_id: t.dataset.ack }, "Alert acknowledged.");
+    if (t.dataset.ack) send("/alert/ack", { alert_id: t.dataset.ack }, "Acknowledgement sent.");
     if (t.dataset.confirm) {
-      send("/mission/confirm", { mission_id: t.dataset.mission, car_id: t.dataset.car, action: t.dataset.confirm },
-        `Marked ${t.dataset.confirm.toLowerCase().replace("_", " ")}.`);
+      const body = { mission_id: t.dataset.mission, car_id: t.dataset.car, action: t.dataset.confirm };
+      const kg = $(`[data-weight-for="${CSS.escape(t.dataset.mission)}"]`);
+      if (t.dataset.confirm === "LOADED" && kg) { // F10: the Cabin sets the cargo load to this
+        if (!kg.value) { toast("Enter the loaded weight in kg first.", false); kg.focus(); return; }
+        body.weight_kg = Number(kg.value);
+      }
+      send("/mission/confirm", body, `${t.dataset.confirm.toLowerCase().replace("_", " ")} sent.`);
     }
     if (t.dataset.fire) send("/fire", { active: t.dataset.fire === "true" }, "Fire alarm updated.");
     if (t.dataset.maint) {
@@ -538,6 +632,13 @@ function wireForms() {
     }
     if (t.dataset.sim === "start") send("/sim/start", {}, "Simulation started.");
     if (t.dataset.sim === "pause") send("/sim/pause", {}, "Simulation paused.");
+    if (t.dataset.sim === "replay") {
+      const trace = $("#trace").value.trim();
+      if (!trace) { toast("Enter the path of a recorded trace first.", false); return; }
+      send("/sim/replay", { trace }, "Replay finished.").then((r) => {
+        if (r && r.ok) toast(`Replay finished: ${r.id === "IDENTICAL" ? "identical to the recorded run" : "DIFFERENT from the recorded run"}.`, r.id === "IDENTICAL");
+      });
+    }
     if (t.dataset.sim === "reset") {
       send("/sim/reset", { scenario: $("#scenario").value, seed: number($("#seed").value) ?? 0 },
         "Simulation reset. Press Start to run it.");
@@ -549,11 +650,11 @@ function wireForms() {
   });
 }
 
-buildHoistway();
 buildHallPanel();
 buildCabinPanel();
-fillCarSelects();
 wireTabs();
 wireForms();
 fillScenarios();
 connect();
+refreshAudit();
+setInterval(refreshAudit, AUDIT_MS);

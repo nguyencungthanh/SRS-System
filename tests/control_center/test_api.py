@@ -223,3 +223,146 @@ def test_HY_05_real_engine_mission_reaches_control_center(runner):
     (mission,) = client.get("/snapshot").json()["missions"]
     # Control Center approved it; the fake Dispatch has already moved it on (e.g. RESERVED).
     assert mission["mission_id"] == "MS-0001" and mission["status"] != "REJECTED"
+
+
+# --- verification findings F2, F3, F6, F16 (15/11) ----------------------------------------
+
+
+@pytest.mark.parametrize("number", [b"NaN", b"Infinity", b"-Infinity", b"1e400"])
+@pytest.mark.parametrize(
+    "path,template",
+    [
+        (
+            "/mission",
+            b'{"role":"BUILDING_STAFF","mission_type":"FREIGHT","origin":2,'
+            b'"destination":9,"material":"boxes","weight_kg":%s}',
+        ),
+        (
+            "/passenger/board",
+            b'{"role":"OPERATOR","car_id":"P1","passenger_id":"X","weight_kg":%s}',
+        ),
+        ("/sim/speed", b'{"role":"OPERATOR","factor":%s}'),
+    ],
+    ids=["mission_weight", "board_weight", "speed"],
+)
+def test_HY_05_non_finite_numbers_are_422_and_never_reach_the_simulation(
+    client, control, path, template, number
+):
+    response = client.post(
+        path, content=template % number, headers={"content-type": "application/json"}
+    )
+    assert response.status_code == 422
+    assert control.submitted == [] and control.controls == []
+
+
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("/sim/reset", {"seed": "abc"}),
+        ("/sim/reset", {"seed": [1]}),
+        ("/sim/reset", {"seed": True}),
+        ("/sim/reset", {"scenario": ["AT-01"]}),
+        ("/sim/reset", {"scenario": {"name": "AT-01"}}),
+        ("/sim/replay", {"trace": 5}),
+        ("/sim/replay", {"trace": ["a.jsonl"]}),
+    ],
+)
+def test_HY_05_engine_command_arguments_are_type_checked(client, control, path, body):
+    response = client.post(path, json={"role": "OPERATOR", **body})
+    assert response.status_code == 422 and response.json()["detail"]
+    assert control.controls == []
+
+
+def test_HY_05_deeply_nested_body_is_422(client, control):
+    deep = b'{"floor": 3, "direction": "UP", "x": ' + b"[" * 100_000 + b"]" * 100_000 + b"}"
+    response = client.post("/hall-call", content=deep, headers={"content-type": "application/json"})
+    assert response.status_code == 422
+    assert control.submitted == []
+
+
+def test_CC_03_omitted_optional_field_reaches_control_center_like_null(client, control):
+    client.post(
+        "/mission",
+        json={"role": "MEDICAL_COORDINATOR", "mission_type": "MEDICAL", "destination": 9},
+    )
+    (msg,) = control.submitted
+    assert msg.origin is None  # Control Center answers MISSING_FIELD, same as "origin": null
+
+
+def test_HY_05_omitted_required_field_gives_a_clean_message(client, control):
+    response = client.post("/hall-call", json={"direction": "UP"})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "missing field: floor"
+
+
+def test_HY_05_snapshot_handlers_run_on_the_event_loop(client):
+    import inspect
+
+    app = client.app
+    handlers = {
+        r.path: r.endpoint
+        for r in app.routes
+        if getattr(r, "path", "") in ("/snapshot", "/scenarios")
+    }
+    assert len(handlers) == 2
+    assert all(inspect.iscoroutinefunction(h) for h in handlers.values())
+
+
+# --- F1: a stalled WebSocket client must not block anyone ------------------------------
+
+
+def test_UI_01_stalled_client_never_blocks_publish_and_keeps_only_the_latest():
+    from api.stream import ClientFeed
+
+    async def scenario():
+        never = asyncio.Event()
+        stalled, healthy = ClientFeed(), ClientFeed()
+        received: list[float] = []
+
+        async def stuck_send(snap):
+            await never.wait()  # a client that stopped reading
+
+        async def good_send(snap):
+            received.append(snap["t_sim"])
+
+        tasks = [
+            asyncio.create_task(stalled.run(stuck_send)),
+            asyncio.create_task(healthy.run(good_send)),
+        ]
+        for t in range(1, 101):  # one publish per tick, like SimRunner.publish()
+            stalled.offer(fake_snapshot(float(t)))  # offer() is synchronous: cannot block
+            healthy.offer(fake_snapshot(float(t)))
+            await asyncio.sleep(0)  # let the sender tasks run between ticks
+        await asyncio.sleep(0.01)
+        for task in tasks:
+            task.cancel()
+        return stalled.pending(), received
+
+    stalled_pending, received = asyncio.run(scenario())
+    assert stalled_pending <= 1  # the stalled client's backlog never grows
+    assert received[-1] == 100.0  # the healthy client kept up to the last tick
+
+
+# --- F5: refused requests are recorded and visible (SRS 5.3) -----------------------------
+
+
+def test_5_3_refused_requests_are_recorded_with_time_role_and_reason(client, control):
+    client.post("/mission", json=mission_body(role="PASSENGER"))
+    client.post("/hall-call", json={"floor": 3, "direction": "UP"})  # accepted: not recorded
+    client.post("/hall-call", json={"floor": 3})  # malformed (422): not a refusal
+    (entry,) = client.get("/audit").json()
+    assert entry == {
+        "t_sim": fake_snapshot()["t_sim"],
+        "command": "/mission",
+        "role": "PASSENGER",
+        "status": 403,
+        "reason": "UNAUTHORIZED_ROLE",
+    }
+
+
+def test_5_3_simulation_refusals_are_recorded_too():
+    refusing = RecordingControl({"ok": False, "id": None, "reason": "INVALID_STATE"})
+    client = TestClient(create_app(refusing, web_dir=None))
+    client.post("/hall-call", json={"floor": 3, "direction": "UP", "role": "PASSENGER"})
+    (entry,) = client.get("/audit").json()
+    assert (entry["status"], entry["reason"], entry["role"]) == (409, "INVALID_STATE", "PASSENGER")

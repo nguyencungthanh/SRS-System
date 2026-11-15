@@ -11,13 +11,17 @@ the behaviour, because a request can break more than one rule and only one reaso
     2. origin and destination present            -> MISSING_FIELD
     3. both floors in 1..FLOORS                  -> FLOOR_OUT_OF_RANGE
     4. origin != destination                     -> SAME_ORIGIN_DESTINATION
-    5. FREIGHT: material is a non-empty string   -> INVALID_MATERIAL
+    5. FREIGHT: material has a visible character -> INVALID_MATERIAL
     6. FREIGHT: weight_kg present and > 0        -> MISSING_FIELD
     7. FREIGHT: weight_kg <= FREIGHT_MAX_KG      -> OVER_PAYLOAD  (exactly the limit is valid)
+
+Rules 6 and 7 are written so that NaN fails them ("not (w > 0)"), never slips through.
 
 Rule 6 "> 0" is Huy's decision (14/11), not in D-54: a weight of 0 or less is treated as no
 usable weight. No RejectReason fits exactly, so MISSING_FIELD is used until An decides.
 """
+
+import unicodedata
 
 from contracts.config import CAR_ORDER, FLOORS, FREIGHT_CAPABLE, FREIGHT_MAX_KG, MEDICAL_CAPABLE
 from contracts.enums import MissionType, RejectReason, Role
@@ -53,6 +57,14 @@ def allowed_cars(mission_type: MissionType) -> tuple[str, ...]:
     return tuple(car for car in CAR_ORDER if car in capable)
 
 
+# Whitespace and invisible characters (e.g. zero-width space U+200B, a format character).
+INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Zs", "Zl", "Zp"})
+
+
+def has_visible_text(text: str | None) -> bool:
+    return bool(text) and any(unicodedata.category(ch) not in INVISIBLE_CATEGORIES for ch in text)
+
+
 def _floor_ok(floor: int) -> bool:
     return LOWEST_FLOOR <= floor <= FLOORS
 
@@ -68,10 +80,10 @@ def validate_request(req: MissionRequest) -> RejectReason | None:
     if req.origin == req.destination:
         return RejectReason.SAME_ORIGIN_DESTINATION
     if req.mission_type == MissionType.FREIGHT:
-        if not req.material or not req.material.strip():
+        if not has_visible_text(req.material):
             return RejectReason.INVALID_MATERIAL
-        if req.weight_kg is None or req.weight_kg <= 0:
+        if req.weight_kg is None or not req.weight_kg > 0:
             return RejectReason.MISSING_FIELD
-        if req.weight_kg > FREIGHT_MAX_KG:
+        if not req.weight_kg <= FREIGHT_MAX_KG:
             return RejectReason.OVER_PAYLOAD
     return None

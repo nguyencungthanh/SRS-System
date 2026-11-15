@@ -9,7 +9,9 @@ Endpoints
     POST /sim/speed      (addition) engine speed factor; SimCommand.SPEED had no endpoint
     GET  /snapshot       current Snapshot once
     GET  /scenarios      (addition) scenario names accepted by /sim/reset
-    WS   /ws             Snapshot on connect and after every processed timestamp
+    GET  /audit          (addition) refused requests with simulation time (SRS 5.3, F5)
+    WS   /ws             Snapshot on connect and after every processed timestamp; a slow
+                         client only falls behind itself (api/stream.py)
     GET  /               the UI in web/ (static files), if the folder exists
 
 Every POST answers a ``contracts.ui.CommandResult`` {ok, id, reason}:
@@ -20,14 +22,26 @@ Every POST answers a ``contracts.ui.CommandResult`` {ok, id, reason}:
     501 reason=None + detail   /optimization/run: no SimControl method yet (gap sent to An)
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.commands import BadRequest, Refused, build_message, check_role, parse_role
+from api.audit import RefusalLog
+from api.commands import (
+    BadRequest,
+    Refused,
+    build_message,
+    check_role,
+    parse_body,
+    parse_role,
+    require,
+)
+from api.stream import ClientFeed
 from contracts.runtime import SimCommand, SimControl
 from contracts.ui import COMMANDS, SNAPSHOT_GET, SNAPSHOT_WS, Command, CommandResult, Snapshot
 
@@ -35,14 +49,15 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 SPEED_PATH = "/sim/speed"
 SCENARIOS_PATH = "/scenarios"
+AUDIT_PATH = "/audit"
 OPTIMIZATION_PATH = "/optimization/run"
 
-# Engine commands: path -> (SimCommand, body keys passed to control()).
-ENGINE_COMMANDS: dict[str, tuple[SimCommand, tuple[str, ...]]] = {
-    "/sim/start": (SimCommand.START, ()),
-    "/sim/pause": (SimCommand.PAUSE, ()),
-    "/sim/reset": (SimCommand.RESET, ("scenario", "seed")),
-    "/sim/replay": (SimCommand.REPLAY, ("trace", "seed")),
+# Engine commands: path -> (SimCommand, {body key: required type}) passed to control().
+ENGINE_COMMANDS: dict[str, tuple[SimCommand, dict[str, type]]] = {
+    "/sim/start": (SimCommand.START, {}),
+    "/sim/pause": (SimCommand.PAUSE, {}),
+    "/sim/reset": (SimCommand.RESET, {"scenario": str, "seed": int}),
+    "/sim/replay": (SimCommand.REPLAY, {"trace": str, "seed": int}),
 }
 
 HTTP_OK, HTTP_FORBIDDEN, HTTP_CONFLICT = 200, 403, 409
@@ -53,54 +68,63 @@ def create_app(control: SimControl, web_dir: Path | None = WEB_DIR) -> FastAPI:
     app = FastAPI(title="Smart Elevator System", version="1.0")
     by_path = {cmd.path: cmd for cmd in COMMANDS}
 
+    refusals = RefusalLog()
+
+    def post(path: str, endpoint) -> None:
+        app.add_api_route(path, _audited(endpoint, path, control, refusals), methods=["POST"])
+
     for cmd in COMMANDS:
         if cmd.message is not None:
-            app.add_api_route(cmd.path, _message_endpoint(control, cmd), methods=["POST"])
+            post(cmd.path, _message_endpoint(control, cmd))
         elif cmd.path in ENGINE_COMMANDS:
-            app.add_api_route(cmd.path, _engine_endpoint(control, cmd), methods=["POST"])
+            post(cmd.path, _engine_endpoint(control, cmd))
 
-    app.add_api_route(
-        OPTIMIZATION_PATH, _optimization_endpoint(by_path[OPTIMIZATION_PATH]), methods=["POST"]
-    )
+    post(OPTIMIZATION_PATH, _optimization_endpoint(by_path[OPTIMIZATION_PATH]))
     speed_cmd = Command(SPEED_PATH, None, by_path["/sim/start"].roles, "body: {factor}")
-    app.add_api_route(SPEED_PATH, _speed_endpoint(control, speed_cmd), methods=["POST"])
+    post(SPEED_PATH, _speed_endpoint(control, speed_cmd))
 
+    @app.get(AUDIT_PATH)
+    async def get_audit() -> JSONResponse:
+        return JSONResponse(refusals.entries())
+
+    # async: a plain ``def`` would run in a worker thread while the simulation loop changes
+    # module state on the event-loop thread ("dictionary changed size during iteration").
     @app.get(SNAPSHOT_GET)
-    def get_snapshot() -> JSONResponse:
+    async def get_snapshot() -> JSONResponse:
         return JSONResponse(control.snapshot())
 
     @app.get(SCENARIOS_PATH)
-    def get_scenarios() -> JSONResponse:
+    async def get_scenarios() -> JSONResponse:
         return JSONResponse(control.scenarios())
 
     @app.websocket(SNAPSHOT_WS)
     async def snapshot_stream(ws: WebSocket) -> None:
         await ws.accept()
-        subscription: dict[str, Any] = {"unsubscribe": None}
-
-        def stop() -> None:
-            # SimControl does not promise that unsubscribing twice is safe: do it once.
-            unsubscribe, subscription["unsubscribe"] = subscription["unsubscribe"], None
-            if unsubscribe is not None:
-                unsubscribe()
+        feed = ClientFeed()
 
         async def push(snap: Snapshot) -> None:
-            # SimRunner.publish() does not catch errors from subscribers: a socket that
-            # closed between two ticks must not stop the simulation loop for everyone.
-            try:
-                await ws.send_json(snap)
-            except Exception:  # noqa: BLE001 - any send failure means this client is gone
-                stop()
+            feed.offer(snap)  # called by SimRunner.publish(): must never wait for this socket
 
-        subscription["unsubscribe"] = control.subscribe(push)
+        unsubscribe = control.subscribe(push)
+        feed.offer(control.snapshot())
         try:
-            await push(control.snapshot())
-            while True:
-                await ws.receive_text()  # the client sends nothing; this waits for close
-        except WebSocketDisconnect:
-            pass
+            # anyio (Starlette's own concurrency layer), not raw asyncio tasks: the server
+            # and the test client cancel the app through anyio cancel scopes, and raw task
+            # cancellation inside them leaked a CancelledError (flaky test on Windows).
+            async with anyio.create_task_group() as tg:
+
+                async def send_all() -> None:
+                    try:
+                        await feed.run(ws.send_json)
+                    except Exception:  # noqa: BLE001 - a failed send means the client is gone
+                        pass
+                    tg.cancel_scope.cancel()
+
+                tg.start_soon(send_all)
+                await _until_closed(ws)
+                tg.cancel_scope.cancel()
         finally:
-            stop()
+            unsubscribe()  # exactly once, whichever side ended first
 
     if web_dir is not None and web_dir.is_dir():
         app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
@@ -108,6 +132,32 @@ def create_app(control: SimControl, web_dir: Path | None = WEB_DIR) -> FastAPI:
 
 
 # --- endpoint factories ------------------------------------------------------------------
+
+HTTP_REFUSED = frozenset({403, 409})
+
+
+def _audited(endpoint, path: str, control: SimControl, refusals: RefusalLog):
+    """Record every refused request (403 wrong role, 409 refused by the simulation)."""
+
+    async def wrapped(request: Request) -> JSONResponse:
+        response = await endpoint(request)
+        if response.status_code in HTTP_REFUSED:
+            try:
+                role = parse_body(await request.body()).get("role")  # body is cached
+            except BadRequest:
+                role = None
+            reason = json.loads(response.body).get("reason")
+            refusals.record(
+                control.snapshot()["t_sim"],
+                path,
+                role if isinstance(role, str) else None,
+                response.status_code,
+                reason,
+            )
+        return response
+
+    wrapped.__name__ = endpoint.__name__
+    return wrapped
 
 
 def _message_endpoint(control: SimControl, cmd: Command):
@@ -127,17 +177,18 @@ def _message_endpoint(control: SimControl, cmd: Command):
 
 
 def _engine_endpoint(control: SimControl, cmd: Command):
-    command, keys = ENGINE_COMMANDS[cmd.path]
+    command, arg_types = ENGINE_COMMANDS[cmd.path]
 
     async def endpoint(request: Request) -> JSONResponse:
         try:
             body = await _json_body(request)
             check_role(cmd, parse_role(body))
+            args = {k: require(body, k, tp) for k, tp in arg_types.items()}
         except Refused as err:
             return _result(HTTP_FORBIDDEN, ok=False, reason=err.reason.value)
         except BadRequest as err:
             return _result(HTTP_UNPROCESSABLE, ok=False, detail=str(err))
-        args = {k: body[k] for k in keys if body.get(k) is not None}
+        args = {k: v for k, v in args.items() if v is not None}
         return _from_sim(control.control(command, **args))
 
     endpoint.__name__ = _route_name(cmd.path)
@@ -183,17 +234,17 @@ def _optimization_endpoint(cmd: Command):
 # --- helpers -----------------------------------------------------------------------------
 
 
-async def _json_body(request: Request) -> dict[str, Any]:
-    raw = await request.body()
-    if not raw:
-        return {}
+async def _until_closed(ws: WebSocket) -> None:
+    """The client sends nothing; this returns when it disconnects."""
     try:
-        body = await request.json()
-    except ValueError as err:
-        raise BadRequest("the body is not valid JSON") from err
-    if not isinstance(body, dict):
-        raise BadRequest("the body must be a JSON object")
-    return body
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        return
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    return parse_body(await request.body())
 
 
 def _from_sim(result: CommandResult) -> JSONResponse:

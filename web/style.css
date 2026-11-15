@@ -86,7 +86,7 @@ h3 { font-size: 1.05rem; }
 .hoistway {
   --floors: 40;
   display: grid;
-  grid-template-columns: 2.2rem repeat(5, 1fr) 4.5rem;
+  grid-template-columns: 2.2rem repeat(var(--cars, 5), 1fr) 4.5rem;
   gap: 6px;
   height: calc(var(--floors) * var(--floor-h));
   margin-bottom: 1rem;
@@ -310,7 +310,7 @@ td.row-actions { display: table-cell; }
 .fleet, .work { overflow-x: auto; }
 @media (max-width: 600px) {
   .layout { padding: 0.5rem; }
-  .hoistway { grid-template-columns: 1.8rem repeat(5, 1fr) 3rem; gap: 3px; }
+  .hoistway { grid-template-columns: 1.8rem repeat(var(--cars, 5), 1fr) 3rem; gap: 3px; }
   .role-picker { margin-left: 0; }
 }
 
@@ -414,3 +414,6 @@ td.row-actions { display: table-cell; }
   cursor: pointer;
 }
 .cabin-row .alarm { margin-left: auto; background: var(--alarm); border-color: var(--alarm); color: #fff; }
+
+.load-kg { width: 4.5rem; padding: 0.1rem 0.3rem; border: 1px solid var(--rule); border-radius: 3px; margin: 0 2px 4px 0; }
+code { font-size: 0.85em; background: #dfe5e9; padding: 0 0.25rem; border-radius: 2px; }
