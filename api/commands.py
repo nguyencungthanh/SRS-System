@@ -23,8 +23,9 @@ from dataclasses import MISSING, dataclass, fields
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from contracts.codec import TYPE_KEY, from_dict
-from contracts.enums import RejectReason, Role
-from contracts.messages import BASE_FIELDS, Message
+from contracts.config import MAX_FLOOR, MIN_FLOOR
+from contracts.enums import Direction, RejectReason, Role
+from contracts.messages import BASE_FIELDS, HallCallPressed, Message
 from contracts.ui import Command
 
 ROLE_KEY = "role"
@@ -95,6 +96,23 @@ def check_role(cmd: Command, role: Role | None) -> None:
     """D-53: refuse before anything reaches the simulation."""
     if cmd.roles is not None and role not in cmd.roles:
         raise Refused(RejectReason.UNAUTHORIZED_ROLE)
+
+
+def hall_call_problem(msg: Message) -> RejectReason | None:
+    """UI-02: answer an impossible Hall Call at once with the D-18 reason.
+
+    Dispatch rejects it anyway, but its HallCallAck never reaches the UI, so without this
+    check the panel would show "accepted" for a call that can never exist.
+    """
+    if not isinstance(msg, HallCallPressed):
+        return None
+    if not MIN_FLOOR <= msg.floor <= MAX_FLOOR:
+        return RejectReason.FLOOR_OUT_OF_RANGE
+    if msg.direction not in (Direction.UP, Direction.DOWN):
+        return RejectReason.INVALID_DIRECTION
+    if (msg.floor, msg.direction) in ((MIN_FLOOR, Direction.DOWN), (MAX_FLOOR, Direction.UP)):
+        return RejectReason.TERMINAL_DIRECTION
+    return None
 
 
 def build_message(cmd: Command, body: dict[str, Any]) -> Message:

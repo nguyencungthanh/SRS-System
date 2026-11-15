@@ -135,7 +135,7 @@ def at05_ack_lost(seed: int = 0) -> Scenario:
 def at05_unsafe(seed: int = 0) -> Scenario:
     return Scenario(
         name="AT-05-unsafe",
-        description="P1 has conflicting sensors. Expect a NACK from P1 and service by P2.",
+        description="P1 has conflicting sensors: Dispatch skips it (DC-02) and P2 serves the call.",
         fleet=_at05_fleet(),
         passengers=(PassengerIntent(t=0.0, passenger_id="PAX-0001", origin=27, destination=5),),
         inputs=(FaultInjected(t_sim=0.0, car_id="P1", kind=FaultKind.SENSOR_CONFLICT),),

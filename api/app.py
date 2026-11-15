@@ -37,6 +37,7 @@ from api.commands import (
     Refused,
     build_message,
     check_role,
+    hall_call_problem,
     parse_body,
     parse_role,
     require,
@@ -170,6 +171,9 @@ def _message_endpoint(control: SimControl, cmd: Command):
             return _result(HTTP_FORBIDDEN, ok=False, reason=err.reason.value)
         except BadRequest as err:
             return _result(HTTP_UNPROCESSABLE, ok=False, detail=str(err))
+        problem = hall_call_problem(msg)
+        if problem is not None:
+            return _result(HTTP_CONFLICT, ok=False, reason=problem.value)
         return _from_sim(control.submit(msg))
 
     endpoint.__name__ = _route_name(cmd.path)
