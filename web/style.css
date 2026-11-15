@@ -392,7 +392,19 @@ td.row-actions { display: table-cell; }
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
-.dest-btn[data-lit="true"] { box-shadow: 0 0 0 2px var(--lantern), 0 0 8px var(--lantern); color: #8a5600; }
+.dest-btn[data-state="pending"] { box-shadow: 0 0 0 2px var(--lantern), 0 0 8px var(--lantern); color: #8a5600; }
+.dest-btn[data-state="served"] { box-shadow: 0 0 0 2px var(--ok); color: var(--ok); }
+.dest-legend { display: flex; gap: 1rem; margin: -0.25rem 0 0.75rem; font-size: 0.8rem; color: var(--muted); }
+.dest-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 0.7rem; height: 0.7rem;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+.dest-legend .pending::before { box-shadow: 0 0 0 2px var(--lantern); }
+.dest-legend .served::before { box-shadow: 0 0 0 2px var(--ok); }
 .cabin-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .cabin-row button {
   padding: 0.35rem 0.8rem;

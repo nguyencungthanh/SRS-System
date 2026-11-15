@@ -17,6 +17,7 @@ const POLL_MS = 500;            // fallback refresh when /ws is not available
 const STALE_TELEMETRY_S = 2.0;  // dim a car whose telemetry is older than this
 const TOAST_MS = 3500;
 const EVENTS_SHOWN = 50;
+const SERVED_SHOWN_S = 15;      // UI-03: how long (simulated seconds) a served destination stays green
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -349,6 +350,34 @@ function selectCabinCar(car) {
   if (lastSnapshot) renderCabin(lastSnapshot);
 }
 
+
+// UI-03: a destination button is "pending" while the car has that CAR_DEST stop, and
+// "served" when the stop disappears while the car stands at that floor. The snapshot lists
+// only pending stops, so the page remembers each car's previous ones. A stop that vanishes
+// anywhere else (cancelled, fault) is not shown as served.
+const pendingBefore = new Map(); // car_id -> Set of floors
+const servedAt = new Map();      // "car:floor" -> t_sim when served
+let lastT = 0;
+
+function trackDestinations(snap) {
+  if (snap.t_sim < lastT) { pendingBefore.clear(); servedAt.clear(); } // reset or replay
+  lastT = snap.t_sim;
+  for (const car of snap.cars) {
+    const now = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
+    for (const floor of pendingBefore.get(car.car_id) || []) {
+      if (!now.has(floor) && car.floor_display === floor) servedAt.set(`${car.car_id}:${floor}`, snap.t_sim);
+    }
+    for (const floor of now) servedAt.delete(`${car.car_id}:${floor}`); // pressed again
+    pendingBefore.set(car.car_id, now);
+  }
+  for (const [key, t] of servedAt) if (snap.t_sim - t > SERVED_SHOWN_S) servedAt.delete(key);
+}
+
+function destinationState(carId, floor, pending) {
+  if (pending.has(floor)) return "pending";
+  return servedAt.has(`${carId}:${floor}`) ? "served" : "";
+}
+
 function renderCabin(snap) {
   const car = snap.cars.find((c) => c.car_id === cabinCar);
   if (!car) return;
@@ -357,8 +386,13 @@ function renderCabin(snap) {
   const over = car.load_kg > MAX_LOAD_KG ? ", overload" : car.load_kg >= FULL_LOAD_KG ? ", full" : "";
   $("#cabin-status").textContent =
     `door ${car.door.toLowerCase()}, ${car.passengers} aboard, ${fmt(car.load_kg, 0)} kg${over}, ${car.mode}`;
-  const wanted = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
-  $$(".dest-btn").forEach((b) => { b.dataset.lit = String(wanted.has(Number(b.dataset.dest))); });
+  const pending = new Set(car.stops.filter((s) => s.kind === "CAR_DEST").map((s) => s.floor));
+  $$(".dest-btn").forEach((b) => {
+    const floor = Number(b.dataset.dest);
+    const state = destinationState(car.car_id, floor, pending);
+    if (state) b.dataset.state = state; else delete b.dataset.state;
+    b.setAttribute("aria-label", `Go to floor ${floor}${state ? ` (${state})` : ""}`);
+  });
 }
 
 function passengerId() {
@@ -381,6 +415,7 @@ function renderPolicy(snap) {
 
 function render(snap) {
   lastSnapshot = snap;
+  trackDestinations(snap);
   const state = $("#sim-state");
   state.textContent = snap.sim_state.toLowerCase();
   state.dataset.state = snap.sim_state;
