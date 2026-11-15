@@ -8,6 +8,7 @@ is the reason. A NACK never changes the route (CB-01).
 from dataclasses import dataclass
 from typing import Any
 
+from cabin.mission import MISSION_STOPS
 from cabin.motion import EPS, check_first_stop
 from contracts.config import FULL_LOAD_KG, MAX_FLOOR, MIN_FLOOR
 from contracts.enums import CabinMode, Direction, FaultKind, NackReason, StopKind
@@ -76,6 +77,13 @@ def validate(msg: RouteProposal, state: RouteState, now: float) -> NackReason | 
     proposed_dests = {(s.ref_id, s.floor) for s in stops if s.kind == StopKind.CAR_DEST}
     if not state.pending_dests <= proposed_dests:
         return NackReason.ONBOARD_COMMITMENT
+    # FRT-02, MED-05: onboard trips finish before the mission starts. A mission stop ahead
+    # of a passenger's stop would strand that passenger behind the exclusive leg.
+    if msg.mission_id is not None:
+        kinds = [s.kind for s in stops]
+        first_mission = next((i for i, k in enumerate(kinds) if k in MISSION_STOPS), None)
+        if first_mission is not None and StopKind.CAR_DEST in kinds[first_mission:]:
+            return NackReason.ONBOARD_COMMITMENT
 
     # 7. Capacity (CB-02, SEN-03): no new ordinary pickups at FULL_LOAD
     current = {_stop_key(s) for s in state.route}
