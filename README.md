@@ -9,6 +9,64 @@ Software-only simulator of the Smart Elevator System described in [docs/SRS-Grou
 | [DECISIONS.md](DECISIONS.md) | every value the SRS leaves open (D-xx) |
 | [AI_CONTEXT.md](AI_CONTEXT.md) | what to paste into your AI before you start |
 
+## Project at a glance
+
+What lives where, from the shared foundation to the new wear-leveling requirement:
+
+![Repository structure](docs/diagrams/structure.svg)
+
+```text
+smart-elevator/
+│
+├── README.md              ← Front door: how to run it, status, AT-01..AT-06 results
+├── PROJECT_PLAN.md        ← The build plan and who does what
+├── CONTRIBUTING.md        ← Team rules: branches, PRs, contract freeze
+├── DECISIONS.md           ← D-01..D-79: every gap in the SRS and what we decided
+├── AI_CONTEXT.md          ← Shared prompt context every AI session starts from
+├── requirements.txt       ← fastapi, uvicorn, httpx, pytest, ruff (pinned)
+├── pyproject.toml         ← ruff + pytest settings
+├── .gitignore
+├── docs/                  ← The SRS we implemented, and these diagrams
+├── ai-log/                ← How we used AI: what it did, what it got wrong
+│
+├── contracts/             ← Shared language of all modules, contract v1
+│   ├── messages.py        ← The 30 message types
+│   ├── interfaces.py      ← What every module must implement
+│   ├── config.py          ← SRS constants (2 s/floor, DELAY_CAP 10 s, 1000 kg, wear limits ...)
+│   ├── ui.py              ← Snapshot + REST commands for the UI
+│   └── runtime.py         ← SimControl: how the API drives the engine
+├── fakes/                 ← Stand-in Dispatch / Cabin / Control Center
+├── simulation/            ← Deterministic bus, engine, virtual passengers, metrics
+├── scenarios/             ← AT-01..AT-05, DEMO, seeded random traffic
+├── app/                   ← Web server, headless run, replay, demo recorder
+│
+├── dispatch/              ← [Thanh] Decides which car serves each call (wear-aware)
+├── cabin/                 ← [Hai] One per car: motion, doors, safety checks, trip counter
+├── control_center/        ← [Huy] Roles, missions, alerts, recovery, policy approval
+├── api/                   ← [Huy] FastAPI: REST commands + live snapshots
+├── web/                   ← [Huy] Control-room UI (index.html, app.js, style.css)
+│   └── demo/              ← "How the code works" explainer, recorded from real runs
+│
+├── optimization/          ← Metrics, evaluator, grid search, SATSA, wear study
+├── results/               ← AT-06 tuning report and wear (NFR) report
+│
+├── tests/                 ← All 89 SRS requirement IDs covered
+│   ├── contract/          ← Contract exams every module must pass
+│   ├── engine/            ← Engine, app, metrics, requirements, wear, demo
+│   ├── dispatch/          ← [Thanh]
+│   ├── cabin/             ← [Hai] Unit, edge-case and whole-system tests + reports
+│   ├── control_center/    ← [Huy] Unit + API tests
+│   └── optimization/      ← Search, evaluator, wear report
+│
+├── Non-functional requirement: wear leveling (new, DECISIONS D-71..D-79)
+│   ├── cabin/cabin.py             ← Trip counter in every telemetry message
+│   ├── dispatch/controller.py     ← Wear penalty on the pickup ETA
+│   ├── simulation/metrics.py      ← Month-end check, maintenance left out
+│   └── optimization/wear.py       ← Wear study → results/wear.md
+│
+└── Re-test everything     ← 671 tests pass · AT-01..AT-06 re-run · replay identical · demo re-recorded
+```
+
 ## Setup
 
 ```bash
