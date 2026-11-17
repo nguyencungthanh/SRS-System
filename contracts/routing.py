@@ -41,6 +41,7 @@ from contracts.messages import (
     RouteVersionReport,
     ServiceEvent,
     Timer,
+    TripCounterReset,
 )
 
 DISPATCH = "dispatch"
@@ -94,6 +95,8 @@ ROUTES: dict[type[Message], tuple[str, ...]] = {
     PolicyActivated: (DISPATCH,),
     # timers
     Timer: (TARGET,),
+    # maintenance (D-77)
+    TripCounterReset: (ALL_CABINS,),
 }
 
 PRIORITY: dict[type[Message], Priority] = {
@@ -130,6 +133,7 @@ PRIORITY: dict[type[Message], Priority] = {
     MaintenanceSet: Priority.INPUT,
     RecoveryRequest: Priority.INPUT,
     PolicyDecision: Priority.INPUT,
+    TripCounterReset: Priority.INPUT,
 }
 
 

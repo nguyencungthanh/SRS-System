@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from contracts.config import DEFAULT_PASSENGER_KG, DEFAULT_POLICY, Policy
+from contracts.config import DEFAULT_PASSENGER_KG, DEFAULT_POLICY, WEAR_MONTH_S, Policy
 from contracts.enums import Direction
 from contracts.messages import CabinInit, Message
 
@@ -46,3 +46,6 @@ class Scenario:
     inputs: tuple[Message, ...] = ()  # scripted inputs (faults, missions, LOADED, ...)
     policy: Policy = DEFAULT_POLICY
     network: tuple[NetworkRule, ...] = ()
+    # Wear NFR (D-76, D-79): the length of a "month"; trip counters reset every
+    # WEAR_RESET_MONTHS months. Wear studies shorten it to cover months in hours.
+    wear_month_s: float = WEAR_MONTH_S

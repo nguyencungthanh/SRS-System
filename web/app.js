@@ -334,6 +334,26 @@ async function refreshAudit() {
 
 // --- UI-05 simulation console -------------------------------------------------------
 
+// Wear NFR (DECISIONS D-71..D-79): floors travelled by P1-P4 since the last 6-monthly reset,
+// and the month's spread (max - min) / max against the limit. G1 is not compared.
+function renderWear(wear) {
+  if (!wear) return;
+  const counters = Object.entries(wear.counters);
+  const top = Math.max(1, ...counters.map(([, v]) => v));
+  const pct = (v) => (v == null ? "-" : `${(v * 100).toFixed(1)} %`);
+  const over = wear.spread != null && wear.spread > wear.limit;
+  $("#wear-rule").textContent = `month ${wear.month}: spread ${pct(wear.spread)} (limit ${pct(wear.limit)})`;
+  $("#wear-rule").dataset.state = over ? "over" : "ok";
+  $("#wear").innerHTML = counters.map(([car, v]) => {
+    const out = wear.excluded.includes(car) ? " (maintenance, not compared)" : "";
+    return `<div class="wear-row"><span>${esc(car)}</span>
+      <span class="wear-bar"><i style="width:${(v / top) * 100}%"></i></span>
+      <span>${fmt(v, 0)} floors${out}</span></div>`;
+  }).join("") || '<p class="quiet">No telemetry yet.</p>';
+  const closed = wear.months.slice(-3).map((m) => `month ${m.month}: ${pct(m.spread)} ${m.ok ? "pass" : "FAIL"}`);
+  $("#wear-months").textContent = closed.length ? `Closed: ${closed.join(" · ")}` : "No month closed yet (a month is 30 simulated days).";
+}
+
 function renderConsole(snap) {
   const m = snap.metrics;
   const tiles = [
@@ -346,6 +366,7 @@ function renderConsole(snap) {
     ["Moved after a fault", m.fault_reassigned ?? 0],
   ];
   $("#metrics").innerHTML = tiles.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
+  renderWear(snap.wear);
 
   const calls = [...snap.calls].reverse();
   $("#calls").innerHTML = calls.length ? calls.map((c) => `<tr>

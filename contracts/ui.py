@@ -85,6 +85,7 @@ class CarView(TypedDict):
     route_version: int
     stops: list[StopView]
     mission_id: str | None
+    trip_floors: float  # D-77: floors travelled since the trip counter was last reset
 
 
 class FleetCarView(CarView):
@@ -163,6 +164,26 @@ class OptimizationView(TypedDict):
     runs: list[OptimizationRunView]
 
 
+class WearMonthView(TypedDict):
+    """One closed month of the wear NFR check (D-75, D-76, D-79)."""
+
+    month: int  # 1 = the first month after t = 0
+    end_t: float  # simulated time the month ended
+    counters: dict[str, float]  # trip counters of P1-P4 at the month end
+    excluded: list[str]  # cars left out: in maintenance during the month (D-75)
+    spread: float | None  # (max - min) / max of the compared counters (D-72)
+    ok: bool  # spread <= limit
+
+
+class WearView(TypedDict):
+    month: int  # the month in progress
+    counters: dict[str, float]  # live trip counters of P1-P4
+    excluded: list[str]  # left out of this month so far
+    spread: float | None  # spread of the month so far
+    limit: float  # WEAR_MONTH_LIMIT
+    months: list[WearMonthView]  # closed months, oldest first
+
+
 class Snapshot(TypedDict):
     t_sim: float
     sim_state: str  # SimState
@@ -177,6 +198,7 @@ class Snapshot(TypedDict):
     metrics: MetricsView
     last_events: list[str]  # latest ~50 log lines, oldest first
     optimization: OptimizationView  # D-68; {"runs": []} when no run was started
+    wear: WearView  # wear NFR (D-79)
 
 
 # Per-module snapshot() return shapes (contracts.interfaces).
@@ -276,6 +298,7 @@ def fake_snapshot(t_sim: float = 0.0) -> Snapshot:
             "route_version": 0,
             "stops": [],
             "mission_id": None,
+            "trip_floors": 0.0,
             "telemetry_age_s": 0.0,
         }
         base.update(over)  # type: ignore[typeddict-item]
@@ -402,5 +425,13 @@ def fake_snapshot(t_sim: float = 0.0) -> Snapshot:
                     "detail": None,
                 }
             ]
+        },
+        "wear": {
+            "month": 1,
+            "counters": {"P1": 812.0, "P2": 798.5, "P3": 805.0, "P4": 790.0},
+            "excluded": [],
+            "spread": 0.027,
+            "limit": 0.05,
+            "months": [],
         },
     }

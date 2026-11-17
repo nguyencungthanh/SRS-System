@@ -31,6 +31,8 @@ from contracts.config import (
     MAX_FLOOR,
     MAX_LOAD_KG,
     SECONDS_PER_FLOOR,
+    WEAR_MAX_PENALTY_S,
+    WEAR_PENALTY_S_PER_FLOOR,
 )
 from contracts.enums import (
     Direction,
@@ -78,6 +80,8 @@ EXPLAIN = {
     "smallest ETA.",
     "Dispatch._plan_missions": "Rank cars for an approved emergency or freight mission.",
     "Dispatch._propose": "Send the chosen car a RouteProposal and start the ACK timeout.",
+    "Dispatch._pick": "Lowest ETA wins, after a wear penalty: 0.2 s per floor a car has "
+    "travelled more than the least-worn one, at most 8 s (wear NFR).",
     "Dispatch._observe": "Remember the car's latest state; it is the only truth Dispatch uses.",
     "Dispatch._reply": "ACK: the car now owns the call. NACK: free it and plan again.",
     "Dispatch._service": "A stop was served: close the request.",
@@ -217,7 +221,12 @@ def _watch_return(name: str, frame, caller, value: Any) -> dict[str, Any] | None
     if name == "hall_route":
         pickup = loc["pickup"]
         floors = None if value is None else [s.floor for s in value]
-        found = {"car": loc["telemetry"].car_id, "ref": pickup.ref_id, "route": floors}
+        found = {
+            "car": loc["telemetry"].car_id,
+            "ref": pickup.ref_id,
+            "route": floors,
+            "trip": round(loc["telemetry"].trip_floors),
+        }
         stops = loc["telemetry"].stops
         if value is not None and stops and "baseline" in loc:
             # The DELAY_CAP guard, recomputed for the route it returned: every stop the
@@ -421,7 +430,7 @@ def inside_of(handling: Handling, outputs: list[Message], checks: list[dict]) ->
         if name == "ordinary_exclusion" and v["excluded"]:
             excluded[v["car"]] = v["excluded"]
         elif name == "hall_route":
-            row = {"car": v["car"], "route": v["route"]}
+            row = {"car": v["car"], "route": v["route"], "trip": v["trip"]}
             if "budget" in v:
                 row["budget"] = v["budget"]
             rows.setdefault(v["ref"], {})[v["car"]] = row
@@ -1109,6 +1118,8 @@ def build(modules=None) -> dict[str, Any]:
             "delayCap": DELAY_CAP_S,
             "fullLoad": FULL_LOAD_KG,
             "maxLoad": MAX_LOAD_KG,
+            "wearGain": WEAR_PENALTY_S_PER_FLOOR,
+            "wearCap": WEAR_MAX_PENALTY_S,
         },
         "stories": [record(story, modules) for story in STORIES],
     }

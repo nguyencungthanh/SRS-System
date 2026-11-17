@@ -65,6 +65,7 @@ from contracts.messages import (
     ServiceEvent,
     Stop,
     Timer,
+    TripCounterReset,
     payload_key,
 )
 from contracts.routing import cabin_address
@@ -128,6 +129,7 @@ class FakeCabin:
                 )
                 self.dests[p.passenger_id] = (p.destination, DestStatus.PENDING)
         self.route_version = init.route_version
+        self.trip_floors = init.trip_floors  # D-77: one count per floor passed
         self._replies: dict[str, tuple[tuple, bool, int, NackReason | None]] = {}
         self._timer_gen = 0  # bumped to invalidate pending move / door timers
         self._last_telemetry: tuple | None = None
@@ -166,6 +168,8 @@ class FakeCabin:
                     self.hold = CabinMode.FIRE
                 elif not active and self.hold == CabinMode.FIRE:
                     self.hold = None
+            case TripCounterReset():
+                self.trip_floors = 0.0
             case RecoveryApproved():
                 if self.hold in (CabinMode.FAULT_HOLD, CabinMode.MAINTENANCE) and not (
                     self.faults & BLOCKING_FAULTS
@@ -192,6 +196,7 @@ class FakeCabin:
             "route_version": self.route_version,
             "stops": [_stop_view(s) for s in self.route],
             "mission_id": self.mission_id,
+            "trip_floors": self.trip_floors,
         }
         dests: list[DestView] = [
             {"car_id": self.car_id, "floor": floor, "passenger_id": pid, "status": status.value}
@@ -265,6 +270,7 @@ class FakeCabin:
             return
         target = self.route[0].floor
         self.floor += 1 if target > self.floor else -1
+        self.trip_floors += 1.0
         self.direction = Direction.UP if target > self.floor else Direction.DOWN
         if self.floor == target:
             self.moving = False
@@ -484,6 +490,7 @@ class FakeCabin:
             faults=tuple(sorted(self.faults)),
             sensors_valid=not (self.faults & SENSOR_FAULTS),
             mission_id=self.mission_id,
+            trip_floors=self.trip_floors,
         )
         key = payload_key(msg)
         if force or key != self._last_telemetry:
