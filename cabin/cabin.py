@@ -74,6 +74,7 @@ from contracts.messages import (
     ServiceEvent,
     Stop,
     Timer,
+    TripCounterReset,
     payload_key,
 )
 from contracts.routing import cabin_address
@@ -104,6 +105,7 @@ class Cabin:
         self.direction = Direction.IDLE  # travel direction while moving
         self.target: int | None = None
         self.motion_epoch = 0
+        self.trip_floors = init.trip_floors  # D-77: floors travelled up to pos0
 
         # doors (D-03)
         self.door = DoorState.CLOSED
@@ -181,6 +183,8 @@ class Cabin:
                     self._drop_hall_pickups()
             case FireAlarm():
                 self.fire = msg.active  # Q6: back to normal when the alarm ends
+            case TripCounterReset():
+                self.trip_floors -= self._trip(now)  # the counter reads 0 from now on
             case MissionLoadConfirmed():
                 self._on_mission_confirm(msg, now, out)
             case AlarmPressed():
@@ -206,6 +210,7 @@ class Cabin:
             "route_version": self.version,
             "stops": [_stop_view(s) for s in self.route],
             "mission_id": self.mission_id,
+            "trip_floors": self._trip(self.now),
         }
         dests: list[DestView] = [
             {"car_id": self.car_id, "floor": floor, "passenger_id": pid, "status": status.value}
@@ -245,6 +250,16 @@ class Cabin:
     def _pos_now(self) -> float:
         """Position at the last simulated time this cabin handled (used by snapshot())."""
         return self._pos(self.now)
+
+    def _trip(self, now: float) -> float:
+        """The trip counter (D-77): floors travelled, including the leg under way."""
+        moved = abs(self._pos(now) - self.pos0) if self.moving else 0.0
+        return self.trip_floors + moved
+
+    def _anchor(self, pos: float) -> None:
+        """Start a new leg at ``pos``; the floors of the leg that ends here are counted."""
+        self.trip_floors += abs(pos - self.pos0)
+        self.pos0 = pos
 
     def _floor(self) -> int:
         return round(self.pos0)
@@ -316,6 +331,7 @@ class Cabin:
             faults=tuple(sorted(self.faults)),
             sensors_valid=self._sensors_valid(),
             mission_id=self.mission_id,
+            trip_floors=self._trip(now),
         )
 
     def _send_telemetry(self, now: float, out: list[Message], heartbeat: bool) -> None:
@@ -397,7 +413,8 @@ class Cabin:
     def _set_target(self, floor: int, now: float, out: list[Message]) -> None:
         """(Re)aim the moving cabin at ``floor`` from its current position."""
         pos = self._pos(now)
-        self.pos0, self.t0, self.target = pos, now, floor
+        self._anchor(pos)
+        self.t0, self.target = now, floor
         self.motion_epoch += 1
         out.append(self._timer(now, motion.travel_time(pos, floor), KEY_ARRIVE, self.motion_epoch))
 
@@ -422,14 +439,15 @@ class Cabin:
     def _stop_motion(self, now: float) -> None:
         """Stop exactly where the cabin is (EMG-02, SAF-03); pending arrival is invalidated."""
         if self.moving:
-            self.pos0 = self._pos(now)
+            self._anchor(self._pos(now))
             self.t0 = now
             self.moving = False
             self.motion_epoch += 1
 
     def _arrive(self, now: float, out: list[Message]) -> None:
         assert self.target is not None
-        self.pos0, self.t0, self.moving = float(self.target), now, False
+        self._anchor(float(self.target))
+        self.t0, self.moving = now, False
         self._event(now, out, E.CAR_ARRIVED, floor=self.target)
         self._serve_here(now, out)
 

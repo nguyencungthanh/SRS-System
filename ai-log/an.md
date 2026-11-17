@@ -271,3 +271,36 @@ how the code works; (3) tests so every feature requirement is covered.
 **Checks:** full `pytest`, `pytest --fakes`, ruff; `tests/engine/test_demo.py` compares the
 recording with the SRS oracles (AT-01 8 s, AT-02 +6 s of 10, AT-03 P2 = 20 s) and fails when
 a code pointer no longer lands on its `def` line.
+
+## 17/11/2026 - Wear leveling NFR (Steve's e-mail)
+
+**Asked:** explain the new requirement; record the team's answers (D-71..D-76: spread formula,
+P1-P4 only, cumulative counters checked at every month end against 5 %, reset every 6 months,
+maintenance left out); implement it and re-test everything.
+
+**AI did**
+
+- Measured before choosing a design: without balancing, 4 h of traffic gave 1.9-5.3 %
+  spread and G1 travelled 0 floors (supports leaving it out). Explained that in a real month
+  randomness alone gives about 0.3 %, so the hard case is the shortened months of a demo.
+- Cabin (and fake) trip counter in telemetry, `TripCounterReset` every 6 months from the
+  engine, monthly check with the maintenance rule in `simulation/metrics.py`, snapshot `wear`
+  view and console panel, Dispatch wear penalty, `python -m optimization.wear`, 9 tests.
+- Compared four Dispatch rules (2 seeds, 8 h, spread every 2 h) and kept the proportional
+  penalty: worst 2.7 % / 3.2 % for +0.0 / +2.1 s mean wait.
+- Re-ran AT-06, the demo recording, the full suite, AT-01..AT-05 and replay.
+
+**AI got wrong (and how it was caught)**
+
+- Shipped a first rule ("least-worn car within 4 s") before measuring it; the data showed it
+  weak and the dearest in waiting time (+2.7 / +4.4 s). Replaced.
+- Killed its own shell again with `pkill -f` matching its own command line.
+- Gave a long experiment a hard timeout, so all results were lost when the laptop ran in
+  power-saver mode (800 MHz); results are now streamed one by one. Changing the power mode
+  was left to the user (system setting).
+- The new car choices made Hai's SY-20 stress test reach a medical re-dispatch for the first
+  time (P3 broke down, P1 took over). The check counted every car that ever held the mission;
+  it now checks "never two owners at once", which is what D-62 allows.
+
+**Open:** D-76 relaxes Steve's 2 % to 5 % (to confirm with him). A car back from a month of
+maintenance stays a month behind and the following months fail until the reset (D-75).

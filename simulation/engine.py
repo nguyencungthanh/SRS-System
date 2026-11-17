@@ -16,10 +16,10 @@ from typing import IO, Any
 
 from contracts import CONTRACT_VERSION
 from contracts.codec import from_dict, to_dict
-from contracts.config import CAR_ORDER, Policy
+from contracts.config import CAR_ORDER, WEAR_RESET_MONTHS, Policy
 from contracts.enums import EventType, SimState
 from contracts.interfaces import CabinModule, ControlCenterModule, DispatchModule
-from contracts.messages import CabinInit, Message
+from contracts.messages import CabinInit, Message, TripCounterReset
 from contracts.ui import FleetCarView, MetricsView, Snapshot
 from simulation.bus import Bus, LogEntry
 from simulation.metrics import RunObserver
@@ -73,7 +73,7 @@ class Engine:
         self._open_log()
         self.inputs: list[dict[str, Any]] = []
         self._last_tel: dict[str, float] = {}
-        self.observer = RunObserver()
+        self.observer = RunObserver(month_s=sc.wear_month_s)
         self._last_events: deque[str] = deque(maxlen=LAST_EVENTS)
         self.bus = Bus(
             [self.dispatch, self.cc, *self.cabins.values(), self.passengers],
@@ -86,6 +86,12 @@ class Engine:
         self.bus.start()
         for msg in sc.inputs:
             self.bus.inject(msg)
+        # D-77: maintenance resets the trip counters every WEAR_RESET_MONTHS months.
+        reset_s = WEAR_RESET_MONTHS * sc.wear_month_s
+        k = 1
+        while k * reset_s < sc.duration_s:
+            self.bus.inject(TripCounterReset(t_sim=k * reset_s))
+            k += 1
 
     def start(self) -> None:
         if self.state == SimState.PAUSED:
@@ -207,6 +213,7 @@ class Engine:
             "metrics": self.metrics(),
             "last_events": list(self._last_events),
             "optimization": {"runs": []},  # filled by app/runner.py (D-68)
+            "wear": self.observer.wear_view(),  # type: ignore[typeddict-item]
         }
 
     def metrics(self) -> MetricsView:

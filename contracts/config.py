@@ -83,3 +83,15 @@ TRAFFIC_MEAN_INTERVAL_S = 12.0  # D-64: Poisson arrivals, one passenger every 12
 QUICK_TRACE_S = 600.0  # D-65: a run started from the UI uses one short trace ...
 QUICK_SEEDS = (1,)  # ... and one training seed, so it finishes in about a minute
 QUICK_HOLDOUT_SEEDS = (101,)
+
+# --- Wear leveling (new NFR, D-71..D-79) ------------------------------------------------
+
+WEAR_CARS = PASSENGER_CARS  # D-73: G1 has another duty cycle and is not compared
+WEAR_MONTH_S = 30 * 24 * 3600.0  # D-76: a month of simulated time
+WEAR_RESET_MONTHS = 6  # D-76: trip counters are reset every 6 months
+WEAR_RESET_S = WEAR_RESET_MONTHS * WEAR_MONTH_S
+WEAR_MONTH_LIMIT = 0.05  # D-76: (max - min) / max of the counters at every month end
+# D-78: a car that has travelled more than the least-worn candidate gets this many seconds
+# added to its pickup ETA per extra floor, at most WEAR_MAX_PENALTY_S (chosen by measurement)
+WEAR_PENALTY_S_PER_FLOOR = 0.2
+WEAR_MAX_PENALTY_S = 8.0

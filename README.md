@@ -68,6 +68,10 @@ python -m optimization --method compare --quick   # AT-06 on one short trace eac
 python -m optimization --method compare           # AT-06 in full (55 pairs x 5 traces), about 6 minutes on 8 cores; writes results/
 ```
 
+```bash
+python -m optimization.wear                       # wear NFR: shortened months, balancing on / off / maintenance; writes results/wear.md
+```
+
 Module flags for both entry points: `--dispatch`, `--cabin`, `--cc` = `auto` (default: the real package if it exists, otherwise the fake) | `real` | `fake`. Example: `python -m app.headless --scenario AT-01 --cabin real --dispatch fake --cc fake`.
 
 Scenarios: `AT-01`, `AT-02`, `AT-03`, `AT-04`, `AT-05-ack-lost`, `AT-05-unsafe`, `DEMO`, `TRAIN-1`..`TRAIN-5`, `HOLDOUT-101`..`HOLDOUT-105`, `QUICK-1`, `RANDOM` (uses the seed given to reset). See `scenarios/`.
@@ -87,6 +91,25 @@ Scenarios: `AT-01`, `AT-02`, `AT-03`, `AT-04`, `AT-05-ack-lost`, `AT-05-unsafe`,
 | `dispatch/`, `tests/dispatch/` | Thanh | Dispatch controller |
 | `cabin/`, `tests/cabin/` | Hai | Cabin controller |
 | `control_center/`, `api/`, `web/`, `tests/control_center/` | Huy | Control Center, REST/WebSocket API, UI |
+
+## Wear leveling (new non-functional requirement)
+
+Steve's e-mail asks that the cars wear evenly: the floors travelled by the units may differ by under 2 % a month, at most 5 % in 6 months, with the trip counter reset every 6 months. The team's reading is in [DECISIONS.md](DECISIONS.md) D-71..D-79: compare P1-P4 only (G1 runs freight missions only), spread = (max - min) / max of the trip counters, checked at every month end against **5 %** (D-76 relaxes the e-mail's 2 %; to confirm with Steve), counters accumulate and reset every 6 months, a car in maintenance is left out of that month.
+
+How it works: each Cabin counts the floors it travels (`trip_floors` in its telemetry); the engine sends `TripCounterReset` every 6 months; Dispatch adds a wear penalty to a more-worn car's pickup ETA (0.2 s per floor it is ahead, at most 8 s, so no call waits more than 8 s longer); `simulation/metrics.py` closes every month and records the spread; the console shows the counters and the month's spread.
+
+Results from [results/wear.md](results/wear.md) (`python -m optimization.wear`, months shortened to 2 hours of traffic, 7 months so the 6-month reset is included):
+
+| Run | Worst month-end spread | Months over 5 % | Mean wait |
+|---|---|---|---|
+| Balanced, seed 1 / seed 2 | 2.66 % / 3.92 % | 0 / 0 | 54.8 s / 58.5 s |
+| Unbalanced, seed 1 / seed 2 | 6.15 % / 3.50 % | 1 / 0 | 55.4 s / 58.1 s |
+| Balanced, P3 in maintenance in month 2 | 25.55 % | 3 | 70.7 s |
+
+What this shows, without over-claiming:
+
+- With balancing every month stayed under 5 %; without it one month failed. In 2-hour months randomness dominates, so balancing does not lower the spread every time (seed 2). A real month has about 50 times more trips; the random part shrinks accordingly.
+- **Open point:** after a month of maintenance a car is a whole month of travel behind. The capped penalty cannot close that gap, so months 4-6 failed until the 6-month reset. D-75 needs a rule for a car coming back (see DECISIONS D-75).
 
 ## Explainer demo: how the code works
 
@@ -114,6 +137,7 @@ on each captioned step; "show state reports" adds the cars' telemetry messages.
 | Dispatch (Thanh), Cabin (Hai), Control Center + API + UI (Huy) | done; every contract test passes on the real modules |
 | System tests across all real modules (Hai, `tests/cabin/test_system_*.py`) | done |
 | Metrics, random traffic, evaluator, grid search, SATSA, UI optimization flow (AN-03..AN-07) | done |
+| Wear leveling NFR (D-71..D-79): trip counters, Dispatch balancing, monthly check, study | done; open point: a car back from a long maintenance (D-75) |
 | Real gRPC transport, real authentication, real-world fire procedures | deferred by design (PROJECT_PLAN Section 1) |
 
 Acceptance tests on the **real** modules (`python -m app.headless --scenario <name>`):
@@ -127,26 +151,27 @@ Acceptance tests on the **real** modules (`python -m app.headless --scenario <na
 | AT-05 | lost ACK / unsafe cabin: never two owners | PASS (both variants) |
 | AT-06 | every (R, W) valid or rejected; SATSA vs grid vs (3, 5) on held-out traces | PASS: all 55 pairs valid, comparison in [results/optimization.md](results/optimization.md) |
 
-`pytest` on the merged code: 661 passed, 1 skipped (the "no api/ yet" check). The full suite takes about 2-4 minutes because of the system stress tests.
+`pytest` on the merged code: 671 passed, 1 skipped (the "no api/ yet" check). The full suite takes about 2-4 minutes because of the system stress tests.
 
 Requirement traceability: each of the 89 requirement IDs of the SRS (SYS, REQ, DC, CB, MOVE, DOOR, SEN, MED, FRT, EMG, SAF, CC, SEC, OPT, SIM, UI, LOG, NFR) is named by at least one test function; the ones no module suite covered are in `tests/engine/test_requirements.py`.
 
 ## Tuning results (AT-06, held-out traces)
 
-From [results/optimization.md](results/optimization.md) (5 training and 5 held-out traces of 30 minutes, real modules). Lower J is better.
+From [results/optimization.md](results/optimization.md) (5 training and 5 held-out traces of 30 minutes, real modules, wear balancing D-78 on). Lower J is better.
 
 | Configuration | J (held-out) | Mean wait | P95 wait |
 |---|---|---|---|
-| Fixed (R, W) = (3, 5) | 119.4 | 53.2 s | 132.3 s |
-| Grid search best (5, 7) | 114.9 | 51.6 s | 126.6 s |
-| SATSA best, seed 0: (1, 0) | 123.1 | 55.0 s | 136.1 s |
+| Fixed (R, W) = (3, 5) | 117.9 | 54.1 s | 127.8 s |
+| Grid search best (5, 7) | 112.3 | 51.3 s | 122.0 s |
+| SATSA best, seed 0: (2, 8) | 120.7 | 54.7 s | 131.9 s |
 | SWEEP baseline | 102.6 | 45.6 s | 113.9 s |
 | FIRST_IDLE baseline | 316.8 | 165.1 s | 303.4 s |
 
 What this shows, without over-claiming:
 
-- Tuning (R, W) by grid search lowered held-out J by about 4 % against the fixed (3, 5).
-- SATSA used 30 simulated pairs instead of 55. With seed 0 it stopped on a flat region and its choice did worse than (3, 5) on held-out traces; over 20 seeds it found the grid's optimum 12 times. The J surface is flat in large areas, which suits an exhaustive search of this small domain better.
-- The directional SWEEP baseline waited less than our commitment-aware dispatcher on this traffic. It also delayed committed stops more often (late commitments 158 vs 145 over the 5 traces). Our dispatcher never broke DELAY_CAP in any run.
+- Tuning (R, W) by grid search lowered held-out J by about 5 % against the fixed (3, 5).
+- SATSA used 30 simulated pairs instead of 55. With seed 0 it stopped on a flat region and its choice did worse than (3, 5) on held-out traces; over 20 seeds it found the grid's optimum 13 times. The J surface is flat in large areas, which suits an exhaustive search of this small domain better.
+- The directional SWEEP baseline waited less than our commitment-aware dispatcher on this traffic. It also delayed committed stops more often (late commitments 158 vs 151 over the 5 traces). Our dispatcher never broke DELAY_CAP in any run.
 - No configuration was rejected; no run had a double owner or a door-interlock breach.
+- Re-run on 17/11/2026 after the wear rule (D-78) was added: J for (3, 5) moved from 119.4 to 117.9, so balancing the wear did not cost waiting time on these traces. The two baselines do not use the rule and gave the same numbers.
 

@@ -68,6 +68,7 @@ from contracts.messages import (
     ServiceEvent,
     Stop,
     Timer,
+    TripCounterReset,
     payload_key,
 )
 from contracts.routing import PRIORITY, ROUTES, priority_of, recipients
@@ -224,6 +225,7 @@ SAMPLES: list[Message] = [
     ),
     PolicyActivated(t_sim=0.0, policy=POLICY),
     Timer(t_sim=8.0, deliver_at=9.0, target="cabin:P1", key="door", ref_id="3"),
+    TripCounterReset(t_sim=15552000.0),
 ]
 
 

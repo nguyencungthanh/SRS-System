@@ -260,6 +260,12 @@ function panel(p, e) {
           <span class="car-chip">${esc(r.car)}</span><span class="bar"><i style="width:${out ? 0 : width}%"></i></span>
           <span class="val" title="${esc(r.note ?? "")}">${val}</span></div>`;
       }).join("");
+      const fastest = p.rows.filter((r) => r.eta != null).sort((a, b) => a.eta - b.eta)[0];
+      const picked = p.rows.find((r) => r.car === p.chosen);
+      const c0 = DATA.constants;
+      const wear = picked && fastest && picked.car !== fastest.car && picked.eta > fastest.eta
+        ? `<div class="quiet">${esc(picked.car)} chosen over ${esc(fastest.car)}: ${esc(fastest.car)} has travelled ${fastest.trip - picked.trip} floors more, so its ETA carried a wear penalty (${fmt(c0.wearGain)} s per floor, at most ${fmt(c0.wearCap)} s), rule D-78.</div>`
+        : "";
       const goods = story.cars.includes("G1")
         ? `<div class="quiet">G1 is the goods car: Dispatch only loops over P1-P4 for hall calls.</div>` : "";
       const chosen = p.rows.find((r) => r.car === p.chosen);
@@ -274,7 +280,7 @@ function panel(p, e) {
               <div class="quiet">delay +${fmt(delay)} s ${over ? "> cap: not allowed" : `≤ ${fmt(c.delayCap)} s: allowed`}</div>`;
           }).join("") + "</div>";
       }
-      return `<div class="panel"><h4>ETA to ${esc(p.ref)}, computed by <code>route_etas()</code> for each car</h4>${rows}${goods}${budget}</div>`;
+      return `<div class="panel"><h4>ETA to ${esc(p.ref)}, computed by <code>route_etas()</code> for each car</h4>${rows}${wear}${goods}${budget}</div>`;
     }
     case "mission": {
       const max = Math.max(30, ...p.rows.map((r) => r.eta ?? 0));

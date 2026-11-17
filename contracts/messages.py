@@ -79,6 +79,7 @@ class CabinInit:
     passengers: tuple[Passenger, ...] = ()
     faults: tuple[FaultKind, ...] = ()
     route_version: int = 0
+    trip_floors: float = 0.0  # D-77: the trip counter's starting value (wear demos)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -381,6 +382,7 @@ class CabinTelemetry(Message):
     faults: tuple[FaultKind, ...] = ()
     sensors_valid: bool = True  # False if any reading is stale or conflicting (SEN-02)
     mission_id: str | None = None
+    trip_floors: float = 0.0  # D-77: floors travelled since the trip counter was last reset
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -485,6 +487,12 @@ class Timer(Message):
     ref_id: str | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class TripCounterReset(Message):
+    """Maintenance resets every cabin's trip counter to 0 (wear NFR, D-77). The engine sends
+    it every WEAR_RESET_S of simulated time. -> every Cabin."""
+
+
 # At t=0 and after every reset the engine sends Timer(target=<name>, key=TIMER_START) to
 # every module, so modules can send their first telemetry and start their own timers (D-08).
 TIMER_START = "start"
@@ -520,4 +528,5 @@ ALL_MESSAGES: tuple[type[Message], ...] = (
     PolicyRecommended,
     PolicyActivated,
     Timer,
+    TripCounterReset,
 )

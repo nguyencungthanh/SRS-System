@@ -152,12 +152,17 @@ def check_stress(r, seed: int) -> None:
     for mid in sorted({u.mission_id for u in r.of(MissionStatusUpdate)}):
         final = r.final_status(mid)
         assert final in FINAL_MISSION, f"seed {seed}: {mid} ended as {final}: {r.statuses(mid)}"
-        reserved = {
-            u.car_id
-            for u in r.of(MissionStatusUpdate, mission_id=mid)
-            if u.status == MissionStatus.RESERVED
-        }
-        assert len(reserved) <= 1, f"seed {seed}: {mid} reserved by several cars {reserved}"
+        # Never two owners at once. D-62: a car that is held gives the mission back
+        # (FAILED) and Dispatch may then reserve another car, one after the other.
+        owner = None
+        for u in r.of(MissionStatusUpdate, mission_id=mid):
+            if u.status == MissionStatus.RESERVED:
+                assert owner in (None, u.car_id), (
+                    f"seed {seed}: {mid} reserved by {u.car_id} while {owner} still held it"
+                )
+                owner = u.car_id
+            elif u.status == MissionStatus.FAILED and u.car_id == owner:
+                owner = None
     # The fleet is back in normal service at the end
     last = {}
     for t in r.of(CabinTelemetry):

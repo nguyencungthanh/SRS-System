@@ -16,6 +16,8 @@ from contracts.config import (
     MAX_FLOOR,
     MIN_FLOOR,
     PASSENGER_CARS,
+    WEAR_MAX_PENALTY_S,
+    WEAR_PENALTY_S_PER_FLOOR,
     Policy,
 )
 from contracts.enums import (
@@ -58,9 +60,19 @@ from .state import Command, CommandState, HallCall, Mission
 class Dispatch:
     name = "dispatch"
 
-    def __init__(self, policy: Policy, algorithm: DispatchAlgorithm) -> None:
+    def __init__(
+        self,
+        policy: Policy,
+        algorithm: DispatchAlgorithm,
+        wear_gain: float | None = WEAR_PENALTY_S_PER_FLOOR,
+        wear_cap_s: float = WEAR_MAX_PENALTY_S,
+    ) -> None:
         self.policy = policy
         self.algorithm = DispatchAlgorithm(algorithm)
+        # D-78 wear balancing: seconds of ETA penalty per floor travelled beyond the
+        # least-worn candidate, capped at wear_cap_s. None turns balancing off.
+        self.wear_gain = wear_gain
+        self.wear_cap_s = wear_cap_s
         self._calls: dict[str, HallCall] = {}
         self._active_calls: dict[tuple[int, Direction], str] = {}
         self._telemetry: dict[str, CabinTelemetry] = {}
@@ -453,10 +465,32 @@ class Dispatch:
                     rank = (float(CAR_ORDER.index(car_id)), len(telemetry.stops), 0)
                 choices.append((rank, car_id, route))
             if choices:
-                _, car_id, route = min(choices)
+                _, car_id, route = self._pick(choices)
                 call.owner = car_id
                 call.status = CallStatus.RESERVED
                 self._propose(car_id, route, (call.request_id,), now, out)
+
+    def _pick(
+        self, choices: list[tuple[tuple[float, int, int], str, tuple[Stop, ...]]]
+    ) -> tuple[tuple[float, int, int], str, tuple[Stop, ...]]:
+        """The car for a hall call (D-78, wear NFR).
+
+        A car that has travelled more floors than the least-worn candidate gets a penalty
+        added to its pickup ETA: ``wear_gain`` seconds per extra floor, at most
+        ``wear_cap_s``. The lowest ETA + penalty wins, then the usual ranking. So balancing
+        never makes a call wait more than ``wear_cap_s`` longer, and small differences in
+        wear cost almost nothing. Only the choice between legal routes changes.
+        """
+        if self.wear_gain is None or self.algorithm != DispatchAlgorithm.COMMITMENT:
+            return min(choices)
+        trip = {c[1]: self._telemetry[c[1]].trip_floors for c in choices}
+        least = min(trip.values())
+
+        def score(c: tuple[tuple[float, int, int], str, tuple[Stop, ...]]):
+            penalty = min(self.wear_cap_s, self.wear_gain * (trip[c[1]] - least))
+            return (c[0][0] + penalty, c[0])
+
+        return min(choices, key=score)
 
     def _plan_missions(self, now: float, out: list[Message]) -> None:
         for mission in sorted(

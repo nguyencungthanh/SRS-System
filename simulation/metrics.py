@@ -29,6 +29,9 @@ from contracts.config import (
     DOOR_OPEN_S,
     DWELL_S,
     SECONDS_PER_FLOOR,
+    WEAR_CARS,
+    WEAR_MONTH_LIMIT,
+    WEAR_MONTH_S,
 )
 from contracts.enums import CabinMode, DoorState, ServiceEventType, StopKind
 
@@ -43,6 +46,14 @@ REMAINING_DOOR_S = {
 }
 
 Entry = dict[str, Any]
+
+
+def wear_spread(counters: dict[str, float]) -> float | None:
+    """(max - min) / max of the trip counters (D-72); None with fewer than two cars."""
+    if len(counters) < 2:
+        return None
+    high, low = max(counters.values()), min(counters.values())
+    return 0.0 if high <= 0 else (high - low) / high
 
 
 def nearest_rank(sorted_values: list[float], q: float) -> float | None:
@@ -91,7 +102,7 @@ def _held(tel: Entry | None) -> bool:
 
 
 class RunObserver:
-    def __init__(self) -> None:
+    def __init__(self, month_s: float = WEAR_MONTH_S) -> None:
         self.created: dict[str, float] = {}
         self.waits: list[float] = []
         self.served: set[str] = set()
@@ -105,11 +116,22 @@ class RunObserver:
         self.door_breaches = 0
         self._pickups_by_car: dict[str, set[str]] = {}
         self._owner: dict[str, str] = {}  # hall call -> car that last carried its pickup
+        # wear NFR (D-71..D-79)
+        self.month_s = month_s
+        self._month_end = month_s
+        self.trips: dict[str, float] = {}  # latest trip counter of each compared car
+        self._in_maintenance: set[str] = set()  # cars in MAINTENANCE right now
+        self._maintained: set[str] = set()  # cars seen in MAINTENANCE this month (D-75)
+        self.months: list[dict[str, Any]] = []  # closed months, oldest first
         self.fault_reassigned: set[str] = set()  # calls moved off a held car (NFR-04)
 
     # --- feeding ----------------------------------------------------------------------
 
     def observe(self, entry: Entry) -> None:
+        at = entry.get("deliver_at")
+        at = entry.get("t_sim", 0.0) if at is None else at
+        while at >= self._month_end:
+            self._close_month()
         kind = entry.get("msg_type")
         if kind == "HallCallAck":
             if entry["accepted"] and not entry["duplicate"]:
@@ -139,6 +161,13 @@ class RunObserver:
     def _telemetry(self, tel: Entry) -> None:
         car = tel["car_id"]
         self._last_tel[car] = tel
+        if car in WEAR_CARS:
+            self.trips[car] = tel.get("trip_floors", 0.0)
+            if tel.get("mode") == CabinMode.MAINTENANCE.value:
+                self._in_maintenance.add(car)
+                self._maintained.add(car)
+            else:
+                self._in_maintenance.discard(car)
         refs = self.references.setdefault(car, {})
         etas = reference_etas(tel)
         current = set()
@@ -205,6 +234,38 @@ class RunObserver:
             "median_wait": nearest_rank(waits, 0.50),
             "p95_wait": nearest_rank(waits, 0.95),
             "max_wait": waits[-1] if waits else None,
+        }
+
+    # --- wear (D-75, D-76, D-79) -----------------------------------------------------------
+
+    def _compared(self) -> dict[str, float]:
+        return {c: v for c, v in sorted(self.trips.items()) if c not in self._maintained}
+
+    def _close_month(self) -> None:
+        compared = self._compared()
+        spread = wear_spread(compared)
+        self.months.append(
+            {
+                "month": len(self.months) + 1,
+                "end_t": self._month_end,
+                "counters": {c: round(v, 1) for c, v in sorted(self.trips.items())},
+                "excluded": sorted(self._maintained & set(self.trips)),
+                "spread": spread,
+                "ok": spread is None or spread <= WEAR_MONTH_LIMIT + TOLERANCE_S,
+            }
+        )
+        self._month_end += self.month_s
+        self._maintained = set(self._in_maintenance)  # still in maintenance: still left out
+
+    def wear_view(self) -> dict[str, Any]:
+        """Live trip counters, the spread of the month so far, and the closed months."""
+        return {
+            "month": len(self.months) + 1,
+            "counters": {c: round(v, 1) for c, v in sorted(self.trips.items())},
+            "excluded": sorted(self._maintained & set(self.trips)),
+            "spread": wear_spread(self._compared()),
+            "limit": WEAR_MONTH_LIMIT,
+            "months": list(self.months),
         }
 
     def breaches(self) -> list[str]:
